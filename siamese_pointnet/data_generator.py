@@ -16,24 +16,29 @@ def generate_next_data(data, labels, batch_size):
 			N - random permutation of cloud from another class
 	"""
 	i = 0
-	while i < data.shape[0]:
-		j = find_point_cloud_from_another_class(data, labels, i)
-		yield shuffle_point_cloud(data[i]), shuffle_point_cloud(data[i]),shuffle_point_cloud(j)
-		i = i+1
-
+	while i+batch_size-1 < data.shape[0]:
+		j = 0
+		A = np.empty([batch_size, data.shape[1], data.shape[2]])
+		P = np.empty([batch_size, data.shape[1], data.shape[2]])
+		N = np.empty([batch_size, data.shape[1], data.shape[2]])
+		while j < batch_size:
+			k = find_point_cloud_from_another_class(data, labels, i)
+			A[j]=shuffle_point_cloud(data[i])
+			P[j]=shuffle_point_cloud(data[i])
+			N[j]=shuffle_point_cloud(k)
+			i = i+1
+			j = j+1
+		yield A, P, N
+		
+		
 def shuffle_point_cloud(point_cloud):
-	index = np.arange(point_cloud.shape[0])
-	np.random.shuffle(index)
-	i, arr = 0, []
-	while i < point_cloud.shape[0]:
-		arr.append(point_cloud[index[i]])
-		i = i+1
-	return np.vstack(arr)
+	np.random.shuffle(point_cloud)
+	return np.vstack(point_cloud)
+
 
 def find_point_cloud_from_another_class(data, labels, index):
 	i = 0
 	while True:
-		j = randint(0, data.shape[0])
+		j = randint(0, data.shape[0]-1)
 		if labels[j][0] != labels[index][0]:
 			return np.vstack(data[j])
-	
