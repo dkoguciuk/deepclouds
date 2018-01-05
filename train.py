@@ -9,7 +9,7 @@ import sys
 import argparse
 import tensorflow as tf
 from siamese_pointnet.model import Model
-import siamese_pointnet.data_generator as gen
+import siamese_pointnet.modelnet_data as modelnet
 
 def train_pointnet():
     """
@@ -44,16 +44,21 @@ def train_pointnet():
         
         # Do the training loop
         for _ in range(num_epochs):
-        
-            # Loop for all batches
-            data = None
-            labels = None
-            for (cloud_a, cloud_p, cloud_n) in gen.generate_next_data(data, labels, batch_size):
+            
+            # modelnet data object
+            modelnet_data = modelnet.ModelnetData()
+            
+            # loop for all batches
+            index = 0
+            for (cloud_a, cloud_p, cloud_n) in modelnet_data.generate_train_tripples(16, shuffle_files=True, shuffle_pointclouds=True):
+                print cloud_a.shape, cloud_p.shape, cloud_n.shape, index
+                index = index + 1
+            return
 
-                # Run optimizer
-                _, _ = sess.run([optimizer, model.loss], feed_dict={model.input_a: cloud_a,
-                                                                       model.input_p: cloud_p,
-                                                                       model.input_n: cloud_n})
+#                 # run optimizer
+#                 _, _ = sess.run([optimizer, model.loss], feed_dict={model.input_a: cloud_a,
+#                                                                     model.input_p: cloud_p,
+#                                                                     model.input_n: cloud_n})
             
             
 
