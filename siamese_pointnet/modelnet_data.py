@@ -52,7 +52,8 @@ class ModelnetData(object):
         self.train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
         self.test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
 
-    def generate_train_tripples(self, batch_size, shuffle_files=False, shuffle_pointclouds=False):
+    def generate_train_tripples(self, batch_size, shuffle_files=False, shuffle_pointclouds=False,
+                                jitter_pointclouds=False, rotate_pointclouds=False):
         """ 
         Generator returns 3 point clouds A (anchor), P (positive), N (negative).
     
@@ -61,6 +62,9 @@ class ModelnetData(object):
                 to be returned by the generator).
             shuffle_files (boolean): Should we shuffle train files?
             shuffle_pointclouds (boolean): Should we shuffle pointclouds for each file?
+            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
+            rotate_pointclouds (boolean): Rotate pointclouds with random angle around axis,
+                but this axis has to contain (0,0) point.
         Returns:
             tuple(A, P, N): where:
                 A - random permutation of next cloud
@@ -90,8 +94,13 @@ class ModelnetData(object):
                     other_cloud_idx = ModelnetData._find_index_of_another_class(pointclouds, labels, global_idx)
                     A[cloud_idx] = ModelnetData._shuffle_data(pointclouds[global_idx])
                     P[cloud_idx] = ModelnetData._shuffle_data(pointclouds[global_idx])
-                    N[cloud_idx] = ModelnetData._shuffle_data(pointclouds[other_cloud_idx]) 
-                yield A, P, N
+                    N[cloud_idx] = ModelnetData._shuffle_data(pointclouds[other_cloud_idx])
+                batch_data = (A, P, N)
+                if jitter_pointclouds:
+                    batch_data = ModelnetData._jitter_pointclouds((A, P, N))
+                if rotate_pointclouds:
+                    batch_data = ModelnetData._rotate_pointclouds((A, P, N))
+                return batch_data
     
     @staticmethod
     def _get_filenames(filepath):
@@ -171,3 +180,63 @@ class ModelnetData(object):
             j = random.randint(0, data.shape[0] - 1)
             if labels[j][0] != labels[index][0]:
                 return j
+
+    @staticmethod
+    def _jitter_pointclouds(batch_tuples, sigma=0.01, clip=0.05):
+        """
+        Randomly jitter points. jittering is per point, but for all tuples in batch data. 
+    
+        Args:
+            batch_tuples (3x np.ndarray of size BxNx3): Batch data with tripple of point clouds.
+            sigma (float): Sigma value of gaussian noise to be applied pointwise.
+            clip (float): Clipping value of gaussian noise.
+        Returns:
+              (3x np.ndarray of size BxNx3): Jittered pointclouds data. 
+        """
+        # Get size
+        if len(batch_tuples) != 3:
+            raise exceptions.AssertionError("Batch should consist of tripples of pointclouds")
+        if batch_tuples[0].shape != batch_tuples[1].shape or batch_tuples[0].shape != batch_tuples[2].shape: 
+            raise exceptions.AssertionError("Clouds in batch should be same size")
+        B, N, C = batch_tuples[0].shape
+        
+        # Generate noise
+        if clip <= 0:
+            raise exceptions.ValueError("Clip should be a positive number")
+        jittered_data = np.clip(sigma * np.random.randn(3, B, N, C), -1 * clip, clip)
+        
+        # Add to pointcloud
+        jittered_data += batch_tuples
+        return jittered_data
+
+    @staticmethod
+    def _rotate_pointclouds(batch_tuples):
+        """
+        Randomly rotate the point clouds to augument the dataset -- the rotation is performed
+        with random angle around random axis, but this axis has to contain (0,0) point.
+    
+        Args:
+            batch_tuples (3x np.ndarray of size BxNx3): Batch data with tripple of point clouds.
+        Returns:
+              (3x np.ndarray of size BxNx3): Rotated pointclouds data. 
+        """
+        # Get size
+        if len(batch_tuples) != 3:
+            raise exceptions.AssertionError("Batch should consist of tripples of pointclouds")
+        if batch_tuples[0].shape != batch_tuples[1].shape or batch_tuples[0].shape != batch_tuples[2].shape: 
+            raise exceptions.AssertionError("Clouds in batch should be same size")
+        B, N, C = batch_tuples[0].shape
+        
+        raise exceptions.NotImplementedError("Rotating pointclouds not implemented yet!")
+        
+#         rotated_data = np.zeros(batch_data.shape, dtype=np.float32)
+#         for k in range(batch_data.shape[0]):
+#             rotation_angle = np.random.uniform() * 2 * np.pi
+#             cosval = np.cos(rotation_angle)
+#             sinval = np.sin(rotation_angle)
+#             rotation_matrix = np.array([[cosval, 0, sinval],
+#                                         [0, 1, 0],
+#                                         [-sinval, 0, cosval]])
+#             shape_pc = batch_data[k, ...]
+#             rotated_data[k, ...] = np.dot(shape_pc.reshape((-1, 3)), rotation_matrix)
+#         return rotated_data

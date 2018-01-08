@@ -50,7 +50,8 @@ def train_pointnet():
             
             # loop for all batches
             index = 0
-            for (cloud_a, cloud_p, cloud_n) in modelnet_data.generate_train_tripples(16, shuffle_files=True, shuffle_pointclouds=True):
+            for (cloud_a, cloud_p, cloud_n) in modelnet_data.generate_train_tripples(16, shuffle_files=True, shuffle_pointclouds=True,
+                                                                                     jitter_pointclouds=True, rotate_pointclouds=True):
                 print cloud_a.shape, cloud_p.shape, cloud_n.shape, index
                 index = index + 1
             return
