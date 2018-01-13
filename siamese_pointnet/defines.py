@@ -38,3 +38,14 @@ DATA_MODELNET_DIR = os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')
 """
 Extracted modelnet data directory.
 """
+
+LOGS_DIR = os.path.join(ROOT_DIR, "logs")
+"""
+Directory for logs for tensorboard.
+"""
+
+# Create all needed dirs
+if not os.path.exists(DATA_DIR):
+    os.mkdir(DATA_DIR)
+if not os.path.exists(LOGS_DIR):
+    os.mkdir(LOGS_DIR)

@@ -41,8 +41,6 @@ class ModelnetData(object):
             raise exceptions.OSError("Your OS is not supported, please switch to linux")
         # download data if it's needed
         if not os.path.exists(df.DATA_MODELNET_DIR):
-            if not os.path.exists(df.DATA_DIR):
-                os.mkdir(df.DATA_DIR)
             zipfile = os.path.basename(df.DATA_URL)
             os.system('wget %s; unzip %s' % (df.DATA_URL, zipfile))
             os.system('mv %s %s' % (zipfile[:-4], df.DATA_DIR))
@@ -52,8 +50,10 @@ class ModelnetData(object):
         self.train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
         self.test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
 
-    def generate_train_tripples(self, batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                jitter_pointclouds=False, rotate_pointclouds=False):
+    def generate_train_tripples(self, batch_size,
+                                shuffle_files=False, shuffle_pointclouds=False,
+                                jitter_pointclouds=False, rotate_pointclouds=False,
+                                reshape_flags=[]):
         """ 
         Generator returns 3 point clouds A (anchor), P (positive), N (negative).
     
@@ -65,6 +65,12 @@ class ModelnetData(object):
             jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around axis,
                 but this axis has to contain (0,0) point.
+            reshape_flags (list of str): Output pointclouds are in the default shape of
+                [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
+                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
+                    would be [batch_size, N*3]
+                transpose_pointclouds --  transpose flatten pointclouds to be shape of
+                    [N*3, batch_size], this flag could be specified only with flatten_pointclouds.
         Returns:
             tuple(A, P, N): where:
                 A - random permutation of next cloud
@@ -86,6 +92,7 @@ class ModelnetData(object):
                 pointclouds, labels, _ = ModelnetData._shuffle_data_with_labels(pointclouds, labels)
             # iterate over all batches
             for batch_idx in range(int(math.floor(pointclouds.shape[0] / batch_size))):
+                # get A, P, N
                 A = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
                 P = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
                 N = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
@@ -96,11 +103,23 @@ class ModelnetData(object):
                     P[cloud_idx] = ModelnetData._shuffle_data(pointclouds[global_idx])
                     N[cloud_idx] = ModelnetData._shuffle_data(pointclouds[other_cloud_idx])
                 batch_data = (A, P, N)
+
+                # jitter
                 if jitter_pointclouds:
-                    batch_data = ModelnetData._jitter_pointclouds((A, P, N))
+                    batch_data = ModelnetData._jitter_pointclouds(batch_data)
+                # rotate
                 if rotate_pointclouds:
-                    batch_data = ModelnetData._rotate_pointclouds((A, P, N))
-                return batch_data
+                    batch_data = ModelnetData._rotate_pointclouds(batch_data)
+                # reshape
+                if "flatten_pointclouds" in reshape_flags:
+                    batch_data = (np.reshape(A, [batch_size, -1]),
+                                  np.reshape(P, [batch_size, -1]),
+                                  np.reshape(N, [batch_size, -1]))
+                    if "transpose_pointclouds" in reshape_flags:
+                        batch_data = (batch_data[0].T, batch_data[1].T, batch_data[2].T)
+
+                # yield
+                yield batch_data
     
     @staticmethod
     def _get_filenames(filepath):
@@ -206,8 +225,8 @@ class ModelnetData(object):
         jittered_data = np.clip(sigma * np.random.randn(3, B, N, C), -1 * clip, clip)
         
         # Add to pointcloud
-        jittered_data += batch_tuples
-        return jittered_data
+        batch_tuples += jittered_data
+        return batch_tuples
 
     @staticmethod
     def _rotate_pointclouds(batch_tuples):
