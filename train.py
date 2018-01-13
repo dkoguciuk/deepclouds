@@ -46,7 +46,7 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin,
             # loop for all batches
             index = 1
             for clouds in modelnet_data.generate_train_tripples(batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                                                jitter_pointclouds=True, rotate_pointclouds=False,
+                                                                jitter_pointclouds=True, rotate_pointclouds_up=True,
                                                                 reshape_flags=["flatten_pointclouds",
                                                                                  "transpose_pointclouds"]):
 

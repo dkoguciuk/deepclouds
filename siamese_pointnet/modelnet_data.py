@@ -52,8 +52,8 @@ class ModelnetData(object):
 
     def generate_train_tripples(self, batch_size,
                                 shuffle_files=False, shuffle_pointclouds=False,
-                                jitter_pointclouds=False, rotate_pointclouds=False,
-                                reshape_flags=[]):
+                                jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                rotate_pointclouds_rand=False, reshape_flags=[]):
         """ 
         Generator returns 3 point clouds A (anchor), P (positive), N (negative).
     
@@ -63,8 +63,10 @@ class ModelnetData(object):
             shuffle_files (boolean): Should we shuffle train files?
             shuffle_pointclouds (boolean): Should we shuffle pointclouds for each file?
             jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
-            rotate_pointclouds (boolean): Rotate pointclouds with random angle around axis,
+            rotate_pointclouds_up (boolean): Rotate pointclouds with random angle around up axis,
                 but this axis has to contain (0,0) point.
+            rotate_pointclouds_rand (boolean): Rotate pointclouds with random angle around
+                random axis, but this axis has to contain (0,0) point.
             reshape_flags (list of str): Output pointclouds are in the default shape of
                 [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
                 flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
@@ -108,8 +110,8 @@ class ModelnetData(object):
                 if jitter_pointclouds:
                     batch_data = ModelnetData._jitter_pointclouds(batch_data)
                 # rotate
-                if rotate_pointclouds:
-                    batch_data = ModelnetData._rotate_pointclouds(batch_data)
+                if rotate_pointclouds_up:
+                    batch_data = ModelnetData._rotate_pointclouds_up(batch_data)
                 # reshape
                 if "flatten_pointclouds" in reshape_flags:
                     batch_data = (np.reshape(A, [batch_size, -1]),
@@ -229,7 +231,39 @@ class ModelnetData(object):
         return batch_tuples
 
     @staticmethod
-    def _rotate_pointclouds(batch_tuples):
+    def _rotate_pointclouds_up(batch_tuples):
+        """
+        Randomly rotate the point clouds to augument the dataset -- the rotation is performed
+        with random angle around random axis, but this axis has to contain (0,0) point.
+
+        Args:
+            batch_tuples (3x np.ndarray of size BxNx3): Batch data with tripple of point clouds.
+        Returns:
+              (3x np.ndarray of size BxNx3): Rotated pointclouds data.
+        """
+        # Get size
+        if len(batch_tuples) != 3:
+            raise exceptions.AssertionError("Batch should consist of tripples of pointclouds")
+        if batch_tuples[0].shape != batch_tuples[1].shape or batch_tuples[0].shape != batch_tuples[2].shape:
+            raise exceptions.AssertionError("Clouds in batch should be same size")
+
+        # New batch data
+        batch_rotated = (np.zeros(batch_tuples[0].shape, dtype=np.float32),
+                         np.zeros(batch_tuples[1].shape, dtype=np.float32),
+                         np.zeros(batch_tuples[1].shape, dtype=np.float32))
+        for batch_idx, batch in enumerate(batch_tuples):
+            for cloud_idx, cloud in enumerate(batch):
+                rotation_angle = np.random.uniform() * 2 * np.pi
+                cosval = np.cos(rotation_angle)
+                sinval = np.sin(rotation_angle)
+                rotation_matrix = np.array([[cosval, 0, sinval],
+                                            [0, 1, 0],
+                                            [-sinval, 0, cosval]])
+                batch_rotated[batch_idx][cloud_idx] = np.dot(cloud.reshape((-1, 3)), rotation_matrix)
+        return batch_rotated
+
+    @staticmethod
+    def _rotate_pointclouds_rand(batch_tuples):
         """
         Randomly rotate the point clouds to augument the dataset -- the rotation is performed
         with random angle around random axis, but this axis has to contain (0,0) point.
