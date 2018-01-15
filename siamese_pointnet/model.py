@@ -18,7 +18,7 @@ class Model(object):
 
     def __init__(self, layers_sizes, batch_size, learning_rate,
                  initialization_method, hidden_activation, output_activation,
-                 margin):
+                 margin, normalize_embedding=True):
         """
         Build a model.
         Args:
@@ -45,12 +45,18 @@ class Model(object):
         # Build forward propagation
         with tf.name_scope("anchor_embedding"):
             self.embedding_a = self._forward_propagation(self.input_a, hidden_activation, output_activation)
+            if normalize_embedding:
+                self.embedding_a = self._normalize_embedding(self.embedding_a) 
             tf.summary.histogram("anchor_embedding", self.embedding_a)
         with tf.name_scope("positive_embedding"):
             self.embedding_p = self._forward_propagation(self.input_p, hidden_activation, output_activation)
+            if normalize_embedding:
+                self.embedding_p = self._normalize_embedding(self.embedding_p)
             tf.summary.histogram("positive_embedding", self.embedding_p)
         with tf.name_scope("negative_embedding"):
             self.embedding_n = self._forward_propagation(self.input_n, hidden_activation, output_activation)
+            if normalize_embedding:
+                self.embedding_n = self._normalize_embedding(self.embedding_n)
             tf.summary.histogram("negative_embedding", self.embedding_n)
 
         # Define Loss function
@@ -71,6 +77,16 @@ class Model(object):
             (tf.summary): tf summary of the model with the whole tf model.
         """
         return self.summary
+
+    def get_loss_function(self):
+        """
+        Get lost to perform evaluation.
+
+        Returns:
+            Loss function.
+        """
+        return self.loss
+        
 
     @classmethod
     def get_model_name(cls):
@@ -168,4 +184,18 @@ class Model(object):
         Returns:
             (tensor): Loss function.
         """
-        return tf.reduce_sum(tf.maximum(tf.squared_difference(embedding_a, embedding_p) - tf.squared_difference(embedding_a, embedding_n) + margin, 0)) / batch_size
+        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p))
+        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n))
+        basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
+        return tf.maximum(basic_loss, 0.0) / batch_size
+
+    def _normalize_embedding(self, embedding):
+        """
+        Normalize embedding of a pointcloud.
+
+        Args:
+            embedding (tensor): Embedding tensor of a pointcloud to be normalized.
+        Returns:
+            (tensor): Normalized embedding tensor of a pointcloud.
+        """
+        return tf.nn.l2_normalize(embedding, dim=0, epsilon=1e-10, name='embeddings')

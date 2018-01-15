@@ -19,6 +19,13 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin,
     """
     Train siamese pointnet.
     """
+    # Losses dir
+    losses_dir = os.path.join(df.ROOT_DIR, "losses_without_zeros")
+    loss_file = os.path.join(losses_dir, name + ".txt")
+    if not os.path.exists(losses_dir):
+        os.mkdir(losses_dir)
+    if os.path.exists(loss_file):
+        os.remove(loss_file)
 
     # Define model
     model = Model(layers_sizes, batch_size, learning_rate,
@@ -50,16 +57,20 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin,
                                                                 reshape_flags=["flatten_pointclouds",
                                                                                  "transpose_pointclouds"]):
 
-                # Info
-                print "Epoch: ", epoch + 1, " cloud: ", index
-                index += 1
-
                 # run optimizer
-                summary_train_batch = sess.run(model.get_summary(), feed_dict={model.input_a: clouds[0],
-                                                                               model.input_p: clouds[1],
-                                                                               model.input_n: clouds[2]})
+                summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
+                                                     feed_dict={model.input_a: clouds[0],
+                                                                model.input_p: clouds[1],
+                                                                model.input_n: clouds[2]})
                 writer.add_summary(summary_train_batch, global_batch_idx)
                 global_batch_idx += 1
+                
+                # Info
+                print "Epoch: ", epoch + 1, " cloud: ", index, " loss: ", loss
+                if loss > 10 ** -6:
+                    with open(loss_file, "a") as myfile:
+                        myfile.write(str(loss) + "\n")
+                index += 1
 
 def main(argv):
 
