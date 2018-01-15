@@ -31,14 +31,11 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin,
     model = Model(layers_sizes, batch_size, learning_rate,
                   initialization_method, hidden_activation, output_activation, margin)
 
-    # Init all vars
-    init = tf.initialize_all_variables()
-
     # Session
     with tf.Session() as sess:
 
         # Run the initialization
-        sess.run(init)
+        sess.run(tf.global_variables_initializer())
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
         writer.add_graph(sess.graph)

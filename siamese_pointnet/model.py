@@ -183,11 +183,11 @@ class Model(object):
 
         Returns:
             (tensor): Loss function.
-        """
-        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p))
-        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n))
+        """ 
+        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=0)
+        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=0)
         basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
-        return tf.maximum(basic_loss, 0.0) / batch_size
+        return tf.reduce_mean(tf.maximum(basic_loss, 0.0))  # / batch_size
 
     def _normalize_embedding(self, embedding):
         """
