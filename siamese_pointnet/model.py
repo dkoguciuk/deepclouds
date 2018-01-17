@@ -6,11 +6,6 @@ class Model(object):
     A MLP based deep Siamese network for pointcloud classification.
     """
 
-    POINTCLOUD_SIZE = 2048
-    """
-    Number of points in the pointcloud.
-    """
-
     MODEL_NAME = "MLP_basic"
     """
     Name of the model, which will be used as a directory for tensorboard logs. 
@@ -18,7 +13,7 @@ class Model(object):
 
     def __init__(self, layers_sizes, batch_size, learning_rate,
                  initialization_method, hidden_activation, output_activation,
-                 margin, normalize_embedding=True):
+                 margin, normalize_embedding=True, pointcloud_size=2048):
         """
         Build a model.
         Args:
@@ -31,16 +26,18 @@ class Model(object):
             output_activation (str): Activation method of last layer, supported layers:
                         relu, sigmoid, sigmoid_my
             margin (float): Learning margin.
+            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
+            pointcloud_size (int): Number of 3D points in the pointcloud.
         """
 
         # Placeholders for input clouds
-        self.input_a = tf.placeholder(tf.float32, [self.POINTCLOUD_SIZE * 3, batch_size], name="input_a")
-        self.input_p = tf.placeholder(tf.float32, [self.POINTCLOUD_SIZE * 3, batch_size], name="input_p")
-        self.input_n = tf.placeholder(tf.float32, [self.POINTCLOUD_SIZE * 3, batch_size], name="input_n")
+        self.input_a = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_a")
+        self.input_p = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_p")
+        self.input_n = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_n")
         
         # Initalize parameters
         self.parameters = {}
-        self._initialize_parameters(self.POINTCLOUD_SIZE * 3, layers_sizes, initialization_method)
+        self._initialize_parameters(pointcloud_size * 3, layers_sizes, initialization_method)
         
         # Build forward propagation
         with tf.name_scope("anchor_embedding"):

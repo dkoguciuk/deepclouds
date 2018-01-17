@@ -39,6 +39,11 @@ DATA_MODELNET_DIR = os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')
 Extracted modelnet data directory.
 """
 
+DATA_SYNTHETIC_DIR = os.path.join(DATA_DIR, 'synthetic')
+"""
+Synthetic data directory.
+"""
+
 LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 """
 Directory for logs for tensorboard.

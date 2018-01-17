@@ -13,30 +13,32 @@ import siamese_pointnet.defines as df
 from siamese_pointnet.model import Model
 import siamese_pointnet.modelnet_data as modelnet
 
-def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
-                   layers_sizes=[2048, 1024, 512, 256, 128],
-                   initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
+CLOUD_SIZE = 32
+
+def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
+                    layers_sizes=[CLOUD_SIZE*3, CLOUD_SIZE*3, CLOUD_SIZE*2, CLOUD_SIZE],
+                    initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
-    Train siamese pointnet.
+    Train siamese pointnet with synthetic data.
     """
-    # Losses dir
-    losses_dir = os.path.join(df.ROOT_DIR, "losses_without_zeros")
-    loss_file = os.path.join(losses_dir, name + ".txt")
-    if not os.path.exists(losses_dir):
-        os.mkdir(losses_dir)
-    if os.path.exists(loss_file):
-        os.remove(loss_file)
 
     # Reset
     tf.reset_default_graph()
 
+    # Generate data if needed
+    data_gen = modelnet.SyntheticData()
+    data_gen_size = data_gen.check_generated_size()
+    if not data_gen_size or data_gen_size[1] != CLOUD_SIZE:
+        data_gen.regenerate_files(pointcloud_size=CLOUD_SIZE)
+
     # Define model
     with tf.device(device):
         model = Model(layers_sizes, batch_size, learning_rate,
-                      initialization_method, hidden_activation, output_activation, margin)
+                      initialization_method, hidden_activation, output_activation, margin,
+                      pointcloud_size=CLOUD_SIZE)
 
     # Session
-    config = tf.ConfigProto(allow_soft_placement = True, log_device_placement=True)
+    config = tf.ConfigProto(allow_soft_placement = True)#, log_device_placement=True)
     with tf.Session(config = config) as sess:
 
         # Run the initialization
@@ -44,21 +46,16 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
         writer.add_graph(sess.graph)
- 
+  
         # Do the training loop
         global_batch_idx = 1
         for epoch in range(epochs):
- 
-            # modelnet data object
-            modelnet_data = modelnet.ModelnetData()
- 
+  
             # loop for all batches
             index = 1
-            for clouds in modelnet_data.generate_train_tripples(batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                                                jitter_pointclouds=True, rotate_pointclouds_up=True,
-                                                                reshape_flags=["flatten_pointclouds",
-                                                                                 "transpose_pointclouds"]):
- 
+            for clouds in data_gen.generate_train_tripples(batch_size, shuffle_pointclouds=False,
+                                                           jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                                           reshape_flags=["flatten_pointclouds", "transpose_pointclouds"]):
                 # run optimizer
                 summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
                                                      feed_dict={model.input_a: clouds[0],
@@ -66,12 +63,9 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
                                                                 model.input_n: clouds[2]})
                 writer.add_summary(summary_train_batch, global_batch_idx)
                 global_batch_idx += 1
-                 
+                   
                 # Info
                 print "Epoch: ", epoch + 1, " batch: ", index, " loss: ", loss
-                if loss > 10 ** -6:
-                    with open(loss_file, "a") as myfile:
-                        myfile.write(str(loss) + "\n")
                 index += 1
 
 def main(argv):
@@ -87,8 +81,8 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-    train_pointnet(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                   learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+    train_synthetic(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+                    learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
 
     # Print all settings at the end of learning
     print "MLP-basic model:"

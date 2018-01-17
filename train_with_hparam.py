@@ -7,11 +7,11 @@
 
 import os
 import sys
-import train
+import train_synthetic
 
 if __name__ == "__main__":
     
-    for learning_rate in [10 ** (-i) for i in range(2, 6)]:
-        for margin in [0.1, 0.2, 0.3]:
-            name = "hparam_lr:" + "{0:.5f}".format(learning_rate) + "_margin:" + "{0:.1f}".format(margin)
-            train.train_pointnet(name=name, batch_size=16, epochs=100, learning_rate=0.001, margin=0.2)
+    for margin in [0.1, 0.2, 0.3]:
+        for learning_rate in [10 ** (-i) for i in range(2, 7)]:
+            name = "hparam_lr:" + "{0:.6f}".format(learning_rate) + "_margin:" + "{0:.1f}".format(margin)
+            train_synthetic.train_synthetic(name=name, batch_size=32, epochs=10000, learning_rate=learning_rate, margin=margin, device="/device:GPU:0")
