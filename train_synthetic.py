@@ -10,10 +10,10 @@ import sys
 import argparse
 import tensorflow as tf
 import siamese_pointnet.defines as df
-from siamese_pointnet.model import Model
+from siamese_pointnet.model import RNNBidirectionalModel
 import siamese_pointnet.modelnet_data as modelnet
 
-CLOUD_SIZE = 32
+CLOUD_SIZE = 8
 
 def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
                     layers_sizes=[CLOUD_SIZE*3, CLOUD_SIZE*3, CLOUD_SIZE*2, CLOUD_SIZE],
@@ -33,39 +33,40 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
 
     # Define model
     with tf.device(device):
-        model = Model(layers_sizes, batch_size, learning_rate,
-                      initialization_method, hidden_activation, output_activation, margin,
-                      pointcloud_size=CLOUD_SIZE)
+        model = RNNBidirectionalModel(layers_sizes, batch_size, learning_rate,
+                         #initialization_method, hidden_activation, output_activation,
+                         margin, pointcloud_size=CLOUD_SIZE)
 
     # Session
     config = tf.ConfigProto(allow_soft_placement = True)#, log_device_placement=True)
     with tf.Session(config = config) as sess:
-
+ 
         # Run the initialization
         sess.run(tf.global_variables_initializer())
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
         writer.add_graph(sess.graph)
-  
+ 
         # Do the training loop
         global_batch_idx = 1
+        summary_skip_batch = 10
         for epoch in range(epochs):
-  
+ 
             # loop for all batches
             index = 1
             for clouds in data_gen.generate_train_tripples(batch_size, shuffle_pointclouds=False,
-                                                           jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                                           reshape_flags=["flatten_pointclouds", "transpose_pointclouds"]):
+                                                           jitter_pointclouds=False, rotate_pointclouds_up=False):
                 # run optimizer
                 summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
                                                      feed_dict={model.input_a: clouds[0],
                                                                 model.input_p: clouds[1],
                                                                 model.input_n: clouds[2]})
-                writer.add_summary(summary_train_batch, global_batch_idx)
+                if global_batch_idx%summary_skip_batch == 0:
+                    writer.add_summary(summary_train_batch, global_batch_idx)
                 global_batch_idx += 1
-                   
+ 
                 # Info
-                print "Epoch: ", epoch + 1, " batch: ", index, " loss: ", loss
+                print "Epoch: %06d batch: %03d loss: %06f" % (epoch + 1, index, loss)
                 index += 1
 
 def main(argv):

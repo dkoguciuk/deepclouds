@@ -1,7 +1,75 @@
 import tensorflow as tf
 
+class GenericModel(object):
+    """
+    A generic model of deep Siamese network for pointcloud classification.
+    """
+    def __init__(self):
+        """
+        This is pure virtual class - one cannot make an instance of it.
+        """
+        raise NotImplementedError()
+    
+    def get_summary(self):
+        """
+        Get tf summary -- one can use this function and pass it to sess.run method,
+        because it would preserve all tf namespaces.
 
-class Model(object):
+        Returns:
+            (tf.summary): tf summary of the model with the whole tf model.
+        """
+        return self.summary
+
+    def get_loss_function(self):
+        """
+        Get lost to perform evaluation.
+
+        Returns:
+            Loss function.
+        """
+        return self.loss
+    
+    @classmethod
+    def get_model_name(cls):
+        """
+        Get name of the model -- each model class would have such method implemented.
+
+        Args:
+            (str): Model name of the class.
+        """
+        return cls.MODEL_NAME
+
+    def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin, batch_size):
+        """
+        Define tripplet loss tensor.
+
+        Args:
+            embedding_a (tensor): Output tensor of the anchor cloud.
+            embedding_p (tensor): Output tensor of the positive cloud.
+            embedding_n (tensor): Output tensor of the negative cloud.
+            margin (float): Loss margin.
+            batch_size (float): Barch size.
+
+        Returns:
+            (tensor): Loss function.
+        """ 
+        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=1)
+        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=1)
+        basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
+        return tf.reduce_mean(tf.maximum(basic_loss, 0.0))  # / batch_size
+
+    def _normalize_embedding(self, embedding):
+        """
+        Normalize embedding of a pointcloud.
+
+        Args:
+            embedding (tensor): Embedding tensor of a pointcloud to be normalized.
+        Returns:
+            (tensor): Normalized embedding tensor of a pointcloud.
+        """
+        return tf.nn.l2_normalize(embedding, dim=0, epsilon=1e-10, name='embeddings')
+
+class MLPModel(GenericModel):
     """
     A MLP based deep Siamese network for pointcloud classification.
     """
@@ -64,36 +132,6 @@ class Model(object):
 
         # Summary merge
         self.summary = tf.summary.merge_all()
-
-    def get_summary(self):
-        """
-        Get tf summary -- one can use this function and pass it to sess.run method,
-        because it would preserve all tf namespaces.
-
-        Returns:
-            (tf.summary): tf summary of the model with the whole tf model.
-        """
-        return self.summary
-
-    def get_loss_function(self):
-        """
-        Get lost to perform evaluation.
-
-        Returns:
-            Loss function.
-        """
-        return self.loss
-        
-
-    @classmethod
-    def get_model_name(cls):
-        """
-        Get name of the model -- each model class would have such method implemented.
-
-        Args:
-            (str): Model name of the class.
-        """
-        return cls.MODEL_NAME
 
     def _initialize_parameters(self, n_x, layers_shapes, initialization_method):
         """
@@ -167,32 +205,123 @@ class Model(object):
     
         return AX
 
-    def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin, batch_size):
-        """
-        Define tripplet loss tensor.
+class RNNBidirectionalModel(GenericModel):
+    """
+    A bidirectional RNN model with LSTM cell with triple loss function for pointcloud classification.
+    """
 
+    MODEL_NAME = "RNN_bidirectional"
+    """
+    Name of the model, which will be used as a directory for tensorboard logs. 
+    """
+
+    def __init__(self, layers_sizes, batch_size, learning_rate,
+                 margin, normalize_embedding=True, pointcloud_size=16):
+        """
+        Build a model.
         Args:
-            embedding_a (tensor): Output tensor of the anchor cloud.
-            embedding_p (tensor): Output tensor of the positive cloud.
-            embedding_n (tensor): Output tensor of the negative cloud.
-            margin (float): Loss margin.
-            batch_size (float): Barch size.
-
-        Returns:
-            (tensor): Loss function.
-        """ 
-        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=0)
-        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=0)
-        basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
-        return tf.reduce_mean(tf.maximum(basic_loss, 0.0))  # / batch_size
-
-    def _normalize_embedding(self, embedding):
+            layers_sizes (list of ints): List of hidden units of mlp, but without the first input layer which is POINTCLOUD_SIZE.
+            batch_size (int): Batch size of SGD.
+            learning_rate (float): Learning rate of SGD.
+            margin (float): Learning margin.
+            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
+            pointcloud_size (int): Number of 3D points in the pointcloud.
         """
-        Normalize embedding of a pointcloud.
 
-        Args:
-            embedding (tensor): Embedding tensor of a pointcloud to be normalized.
-        Returns:
-            (tensor): Normalized embedding tensor of a pointcloud.
-        """
-        return tf.nn.l2_normalize(embedding, dim=0, epsilon=1e-10, name='embeddings')
+        # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
+        self.input_a = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_a")
+        self.input_p = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_p")
+        self.input_n = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_n")
+        
+        # Multilayer bidirectional LSTM
+        cells = {'a' : { 'fw' : [], 'bw' : []},
+                 'p' : { 'fw' : [], 'bw' : []},
+                 'n' : { 'fw' : [], 'bw' : []}}
+        states = {'a' : { 'fw' : [], 'bw' : []},
+                  'p' : { 'fw' : [], 'bw' : []},
+                  'n' : { 'fw' : [], 'bw' : []}}
+        for layers in layers_sizes:
+
+            # Layer
+            cell_fw_a = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_bw_a = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_fw_p = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_bw_p = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_fw_n = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_bw_n = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            
+            cells['a']['fw'].append(cell_fw_a)
+            cells['a']['bw'].append(cell_bw_a)
+            cells['p']['fw'].append(cell_fw_p)
+            cells['p']['bw'].append(cell_bw_p)
+            cells['n']['fw'].append(cell_fw_n)
+            cells['n']['bw'].append(cell_bw_n)
+            
+            # State
+            state_fw_a = cell_fw_a.zero_state(batch_size, tf.float32)
+            state_bw_a = cell_bw_a.zero_state(batch_size, tf.float32)
+            state_fw_p = cell_fw_p.zero_state(batch_size, tf.float32)
+            state_bw_p = cell_bw_p.zero_state(batch_size, tf.float32)
+            state_fw_n = cell_fw_n.zero_state(batch_size, tf.float32)
+            state_bw_n = cell_bw_n.zero_state(batch_size, tf.float32)
+            
+            states['a']['fw'].append(state_fw_a)
+            states['a']['bw'].append(state_bw_a)
+            states['p']['fw'].append(state_fw_p)
+            states['p']['bw'].append(state_bw_p)
+            states['n']['fw'].append(state_fw_n)
+            states['n']['bw'].append(state_bw_n)
+
+         # Get layer output
+        outputs_a, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['a']['fw'], cells['a']['bw'],
+                                                         initial_states_fw=states['a']['fw'],
+                                                         initial_states_bw=states['a']['bw'],
+                                                         inputs=self.input_a, dtype=tf.float32,
+                                                         scope='BLSTMA')   
+        outputs_p, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['p']['fw'], cells['p']['bw'],
+                                                         initial_states_fw=states['p']['fw'],
+                                                         initial_states_bw=states['p']['bw'],
+                                                         inputs=self.input_p, dtype=tf.float32,
+                                                         scope='BLSTMP')
+        outputs_n, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['n']['fw'], cells['n']['bw'],
+                                                         initial_states_fw=states['n']['fw'],
+                                                         initial_states_bw=states['n']['bw'],
+                                                         inputs=self.input_n, dtype=tf.float32,
+                                                         scope='BLSTMN')
+
+        # Define weights
+        num_classes = pointcloud_size
+        weights = {
+            # Hidden layer weights => 2*n_hidden because of forward + backward cells
+            'out': tf.Variable(tf.random_normal([2*layers_sizes[-1], layers_sizes[-1]]))
+        }
+        biases = {
+            'out': tf.Variable(tf.random_normal([layers_sizes[-1]]))
+        }
+        
+        # Build forward propagation
+        # Linear activation, using rnn inner loop last output
+        with tf.name_scope("anchor_embedding"):
+            self.embedding_a = tf.matmul(outputs_a[-1], weights['out']) + biases['out']
+            if normalize_embedding:
+                self.embedding_a = self._normalize_embedding(self.embedding_a) 
+            tf.summary.histogram("anchor_embedding", self.embedding_a)
+        with tf.name_scope("positive_embedding"):
+            self.embedding_p = tf.matmul(outputs_p[-1], weights['out']) + biases['out']
+            if normalize_embedding:
+                self.embedding_p = self._normalize_embedding(self.embedding_p)
+            tf.summary.histogram("positive_embedding", self.embedding_p)
+        with tf.name_scope("negative_embedding"):
+            self.embedding_n = tf.matmul(outputs_n[-1], weights['out']) + biases['out']
+            if normalize_embedding:
+                self.embedding_n = self._normalize_embedding(self.embedding_n)
+            tf.summary.histogram("negative_embedding", self.embedding_n)
+        
+       # Define Loss function
+        with tf.name_scope("batch_training"):
+            self.loss = self._tripplet_loss(self.embedding_a, self.embedding_p, self.embedding_n, margin, batch_size)
+            tf.summary.scalar("batch_cost", self.loss)
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss)
+
+        # Summary merge
+        self.summary = tf.summary.merge_all()

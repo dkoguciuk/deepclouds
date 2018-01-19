@@ -10,7 +10,7 @@ import sys
 import train_synthetic
 
 if __name__ == "__main__":
-    
+
     for margin in [0.1, 0.2, 0.3]:
         for learning_rate in [10 ** (-i) for i in range(2, 7)]:
             name = "hparam_lr:" + "{0:.6f}".format(learning_rate) + "_margin:" + "{0:.1f}".format(margin)
