@@ -19,13 +19,6 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
     """
     Train siamese pointnet.
     """
-    # Losses dir
-    losses_dir = os.path.join(df.ROOT_DIR, "losses_without_zeros")
-    loss_file = os.path.join(losses_dir, name + ".txt")
-    if not os.path.exists(losses_dir):
-        os.mkdir(losses_dir)
-    if os.path.exists(loss_file):
-        os.remove(loss_file)
 
     # Reset
     tf.reset_default_graph()
@@ -36,8 +29,8 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
                       initialization_method, hidden_activation, output_activation, margin)
 
     # Session
-    config = tf.ConfigProto(allow_soft_placement = True, log_device_placement=True)
-    with tf.Session(config = config) as sess:
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+    with tf.Session(config=config) as sess:
 
         # Run the initialization
         sess.run(tf.global_variables_initializer())
@@ -55,9 +48,8 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
             # loop for all batches
             index = 1
             for clouds in modelnet_data.generate_train_tripples(batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                                                jitter_pointclouds=True, rotate_pointclouds_up=True,
-                                                                reshape_flags=["flatten_pointclouds",
-                                                                                 "transpose_pointclouds"]):
+                                                                jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                                                reshape_flags=["flatten_pointclouds"]):
  
                 # run optimizer
                 summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],

@@ -28,6 +28,15 @@ class GenericModel(object):
             Loss function.
         """
         return self.loss
+
+    def get_optimizer(self):
+        """
+        Get optimizer to perform learning.
+
+        Returns:
+            Optimizer.
+        """
+        return self.optimizer
     
     @classmethod
     def get_model_name(cls):
@@ -67,7 +76,7 @@ class GenericModel(object):
         Returns:
             (tensor): Normalized embedding tensor of a pointcloud.
         """
-        return tf.nn.l2_normalize(embedding, dim=0, epsilon=1e-10, name='embeddings')
+        return tf.nn.l2_normalize(embedding, dim=1, epsilon=1e-10, name='embeddings')
 
 class MLPModel(GenericModel):
     """
@@ -99,9 +108,9 @@ class MLPModel(GenericModel):
         """
 
         # Placeholders for input clouds
-        self.input_a = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_a")
-        self.input_p = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_p")
-        self.input_n = tf.placeholder(tf.float32, [pointcloud_size * 3, batch_size], name="input_n")
+        self.input_a = tf.placeholder(tf.float32, [batch_size, pointcloud_size * 3], name="input_a")
+        self.input_p = tf.placeholder(tf.float32, [batch_size, pointcloud_size * 3], name="input_p")
+        self.input_n = tf.placeholder(tf.float32, [batch_size, pointcloud_size * 3], name="input_n")
         
         # Initalize parameters
         self.parameters = {}
@@ -143,12 +152,12 @@ class MLPModel(GenericModel):
         """
         # First layer
         if initialization_method == "xavier":
-            self.parameters["W1"] = tf.get_variable("W1", [layers_shapes[0], n_x], initializer=tf.contrib.layers.xavier_initializer())
+            self.parameters["W1"] = tf.get_variable("W1", [n_x, layers_shapes[0]], initializer=tf.contrib.layers.xavier_initializer())
         elif initialization_method == "hu":
-            self.parameters["W1"] = tf.Variable(tf.random_normal([layers_shapes[0], n_x]) * tf.sqrt(2.0 / n_x), name="W1")
+            self.parameters["W1"] = tf.Variable(tf.random_normal([n_x, layers_shapes[0]]) * tf.sqrt(2.0 / n_x), name="W1")
         else:
             raise ValueError("I don't know this method of net's weights initialization..")
-        self.parameters["b1"] = tf.get_variable("b1", [layers_shapes[0], 1], initializer=tf.zeros_initializer())
+        self.parameters["b1"] = tf.get_variable("b1", [layers_shapes[0]], initializer=tf.zeros_initializer())
         tf.summary.histogram("W1", self.parameters["W1"])
         tf.summary.histogram("b1", self.parameters["b1"])
     
@@ -157,10 +166,10 @@ class MLPModel(GenericModel):
             leyers_shape_idx = idx + 1
             layers_param_idx = str(idx + 2)
             if initialization_method == "xavier":
-                self.parameters["W" + layers_param_idx] = tf.get_variable("W" + layers_param_idx, [layers_shapes[leyers_shape_idx], layers_shapes[leyers_shape_idx - 1]], initializer=tf.contrib.layers.xavier_initializer())
+                self.parameters["W" + layers_param_idx] = tf.get_variable("W" + layers_param_idx, [layers_shapes[leyers_shape_idx - 1], layers_shapes[leyers_shape_idx]], initializer=tf.contrib.layers.xavier_initializer())
             elif initialization_method == "hu":
-                self.parameters["W" + layers_param_idx] = tf.Variable(tf.random_normal([layers_shapes[leyers_shape_idx], layers_shapes[leyers_shape_idx - 1]]) * tf.sqrt(2.0 / layers_shapes[leyers_shape_idx - 1]), name="W" + layers_param_idx)
-            self.parameters["b" + layers_param_idx] = tf.get_variable("b" + layers_param_idx, [layers_shapes[leyers_shape_idx], 1], initializer=tf.zeros_initializer())
+                self.parameters["W" + layers_param_idx] = tf.Variable(tf.random_normal([layers_shapes[leyers_shape_idx - 1], layers_shapes[leyers_shape_idx]]) * tf.sqrt(2.0 / layers_shapes[leyers_shape_idx - 1]), name="W" + layers_param_idx)
+            self.parameters["b" + layers_param_idx] = tf.get_variable("b" + layers_param_idx, [layers_shapes[leyers_shape_idx]], initializer=tf.zeros_initializer())
             tf.summary.histogram("W" + layers_param_idx, self.parameters["W" + layers_param_idx])
             tf.summary.histogram("b" + layers_param_idx, self.parameters["b" + layers_param_idx])
 
@@ -184,7 +193,7 @@ class MLPModel(GenericModel):
         # Hidden layers
         for idx in range(1, len(self.parameters) / 2):
             with tf.name_scope("layer_" + str(idx)):
-                ZX = tf.add(tf.matmul(self.parameters["W" + str(idx)], AX), self.parameters["b" + str(idx)])
+                ZX = tf.add(tf.matmul(AX, self.parameters["W" + str(idx)]), self.parameters["b" + str(idx)])
                 if hidden_activation == "sigmoid":
                     AX = tf.nn.sigmoid(ZX, name="sigmoid" + str(idx))
                 elif hidden_activation == "relu":
@@ -197,7 +206,7 @@ class MLPModel(GenericModel):
         # Output layer
         idx = len(self.parameters) / 2
         with tf.name_scope("layer_" + str(idx)):
-            ZX = tf.add(tf.matmul(self.parameters["W" + str(idx)], AX), self.parameters["b" + str(idx)])
+            ZX = tf.add(tf.matmul(AX, self.parameters["W" + str(idx)]), self.parameters["b" + str(idx)])
             if output_activation == "sigmoid":
                 AX = tf.nn.sigmoid(ZX, name="sigmoid" + str(idx))
             elif output_activation == "relu":
@@ -273,46 +282,51 @@ class RNNBidirectionalModel(GenericModel):
             states['n']['bw'].append(state_bw_n)
 
          # Get layer output
-        outputs_a, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['a']['fw'], cells['a']['bw'],
+        output_a, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['a']['fw'], cells['a']['bw'],
                                                          initial_states_fw=states['a']['fw'],
                                                          initial_states_bw=states['a']['bw'],
                                                          inputs=self.input_a, dtype=tf.float32,
-                                                         scope='BLSTMA')   
-        outputs_p, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['p']['fw'], cells['p']['bw'],
+                                                         scope='BLSTMA')
+        output_p, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['p']['fw'], cells['p']['bw'],
                                                          initial_states_fw=states['p']['fw'],
                                                          initial_states_bw=states['p']['bw'],
                                                          inputs=self.input_p, dtype=tf.float32,
                                                          scope='BLSTMP')
-        outputs_n, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['n']['fw'], cells['n']['bw'],
+        output_n, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['n']['fw'], cells['n']['bw'],
                                                          initial_states_fw=states['n']['fw'],
                                                          initial_states_bw=states['n']['bw'],
                                                          inputs=self.input_n, dtype=tf.float32,
                                                          scope='BLSTMN')
 
         # Define weights
-        num_classes = pointcloud_size
         weights = {
             # Hidden layer weights => 2*n_hidden because of forward + backward cells
-            'out': tf.Variable(tf.random_normal([2*layers_sizes[-1], layers_sizes[-1]]))
+            'out': tf.Variable(tf.random_normal([2 * layers_sizes[-1], 1]))
         }
         biases = {
-            'out': tf.Variable(tf.random_normal([layers_sizes[-1]]))
+            'out': tf.Variable(tf.random_normal([1]))
         }
-        
+
         # Build forward propagation
         # Linear activation, using rnn inner loop last output
         with tf.name_scope("anchor_embedding"):
-            self.embedding_a = tf.matmul(outputs_a[-1], weights['out']) + biases['out']
+            output_list = tf.unstack(output_a, axis=0)
+            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
+            self.embedding_a = tf.stack(embeddings, axis=0)
             if normalize_embedding:
-                self.embedding_a = self._normalize_embedding(self.embedding_a) 
+                self.embedding_a = self._normalize_embedding(self.embedding_a)
             tf.summary.histogram("anchor_embedding", self.embedding_a)
         with tf.name_scope("positive_embedding"):
-            self.embedding_p = tf.matmul(outputs_p[-1], weights['out']) + biases['out']
+            output_list = tf.unstack(output_p, axis=0)
+            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
+            self.embedding_p = tf.stack(embeddings, axis=0)
             if normalize_embedding:
                 self.embedding_p = self._normalize_embedding(self.embedding_p)
             tf.summary.histogram("positive_embedding", self.embedding_p)
         with tf.name_scope("negative_embedding"):
-            self.embedding_n = tf.matmul(outputs_n[-1], weights['out']) + biases['out']
+            output_list = tf.unstack(output_n, axis=0)
+            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
+            self.embedding_n = tf.stack(embeddings, axis=0)
             if normalize_embedding:
                 self.embedding_n = self._normalize_embedding(self.embedding_n)
             tf.summary.histogram("negative_embedding", self.embedding_n)

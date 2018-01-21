@@ -10,13 +10,13 @@ import sys
 import argparse
 import tensorflow as tf
 import siamese_pointnet.defines as df
-from siamese_pointnet.model import RNNBidirectionalModel
+from siamese_pointnet.model import RNNBidirectionalModel, MLPModel
 import siamese_pointnet.modelnet_data as modelnet
 
-CLOUD_SIZE = 8
+CLOUD_SIZE = 32
 
 def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
-                    layers_sizes=[CLOUD_SIZE*3, CLOUD_SIZE*3, CLOUD_SIZE*2, CLOUD_SIZE],
+                    layers_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE],
                     initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
     Train siamese pointnet with synthetic data.
@@ -34,12 +34,13 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
     # Define model
     with tf.device(device):
         model = RNNBidirectionalModel(layers_sizes, batch_size, learning_rate,
-                         #initialization_method, hidden_activation, output_activation,
+        # model = MLPModel(layers_sizes, batch_size, learning_rate,
+        #                 initialization_method, hidden_activation, output_activation,
                          margin, pointcloud_size=CLOUD_SIZE)
 
     # Session
-    config = tf.ConfigProto(allow_soft_placement = True)#, log_device_placement=True)
-    with tf.Session(config = config) as sess:
+    config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
+    with tf.Session(config=config) as sess:
  
         # Run the initialization
         sess.run(tf.global_variables_initializer())
@@ -49,19 +50,21 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
  
         # Do the training loop
         global_batch_idx = 1
-        summary_skip_batch = 10
+        summary_skip_batch = 1
         for epoch in range(epochs):
  
             # loop for all batches
             index = 1
             for clouds in data_gen.generate_train_tripples(batch_size, shuffle_pointclouds=False,
                                                            jitter_pointclouds=False, rotate_pointclouds_up=False):
+                                                           # reshape_flags=["flatten_pointclouds"]):
+
                 # run optimizer
-                summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
-                                                     feed_dict={model.input_a: clouds[0],
-                                                                model.input_p: clouds[1],
-                                                                model.input_n: clouds[2]})
-                if global_batch_idx%summary_skip_batch == 0:
+                summary_train_batch, loss, _ = sess.run([model.get_summary(), model.get_loss_function(), model.get_optimizer()],
+                                                        feed_dict={model.input_a: clouds[0],
+                                                                   model.input_p: clouds[1],
+                                                                   model.input_n: clouds[2]})
+                if global_batch_idx % summary_skip_batch == 0:
                     writer.add_summary(summary_train_batch, global_batch_idx)
                 global_batch_idx += 1
  
