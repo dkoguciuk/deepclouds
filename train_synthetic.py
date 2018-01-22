@@ -55,9 +55,9 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
  
             # loop for all batches
             index = 1
-            for clouds in data_gen.generate_train_tripples(batch_size, shuffle_pointclouds=False,
-                                                           jitter_pointclouds=False, rotate_pointclouds_up=False):
-                                                           # reshape_flags=["flatten_pointclouds"]):
+            for clouds in data_gen.generate_random_tripples(batch_size, shuffle_pointclouds=False,
+                                                            jitter_pointclouds=False, rotate_pointclouds_up=False):
+                                                            # reshape_flags=["flatten_pointclouds"]):
 
                 # run optimizer
                 summary_train_batch, loss, _ = sess.run([model.get_summary(), model.get_loss_function(), model.get_optimizer()],

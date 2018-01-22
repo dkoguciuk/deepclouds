@@ -85,23 +85,47 @@ class GenericData(object):
                 return j
 
     @staticmethod
-    def _jitter_pointclouds(batch_tuples, sigma=0.01, clip=0.05):
+    def _jitter_pointclouds(pointclouds, sigma=0.01, clip=0.05):
+        """
+        Randomly jitter points. Jittering is per point, but for pointclouds in the batch. 
+    
+        Args:
+            pointclouds (np.ndarray of size [B,N,3]): Point clouds stacked in single batch.
+            sigma (float): Sigma value of gaussian noise to be applied pointwise.
+            clip (float): Clipping value of gaussian noise.
+        Returns:
+              (np.ndarray of size [B,N,3]): Jittered pointclouds data. 
+        """
+        # Get size
+        B, N, C = pointclouds.shape
+        
+        # Generate noise
+        if clip <= 0:
+            raise exceptions.ValueError("Clip should be a positive number")
+        jittered_data = np.clip(sigma * np.random.randn(B, N, C), -1 * clip, clip)
+        
+        # Add to pointcloud
+        pointclouds += jittered_data
+        return pointclouds
+
+    @staticmethod
+    def _jitter_pointclouds_tuples(pointclouds_tuples, sigma=0.01, clip=0.05):
         """
         Randomly jitter points. Jittering is per point, but for all tuples in batch data. 
     
         Args:
-            batch_tuples (3x np.ndarray of size [B,N,3]): Batch data with tripple of point clouds.
+            pointclouds_tuples (3x np.ndarray of size [B,N,3]): Batch data with tripple of point clouds.
             sigma (float): Sigma value of gaussian noise to be applied pointwise.
             clip (float): Clipping value of gaussian noise.
         Returns:
               (3x np.ndarray of size [B,N,3]): Jittered pointclouds data. 
         """
         # Get size
-        if len(batch_tuples) != 3:
+        if len(pointclouds_tuples) != 3:
             raise exceptions.AssertionError("Batch should consist of tripples of pointclouds")
-        if batch_tuples[0].shape != batch_tuples[1].shape or batch_tuples[0].shape != batch_tuples[2].shape: 
+        if pointclouds_tuples[0].shape != pointclouds_tuples[1].shape or pointclouds_tuples[0].shape != pointclouds_tuples[2].shape: 
             raise exceptions.AssertionError("Clouds in batch should be same size")
-        B, N, C = batch_tuples[0].shape
+        B, N, C = pointclouds_tuples[0].shape
         
         # Generate noise
         if clip <= 0:
@@ -109,8 +133,8 @@ class GenericData(object):
         jittered_data = np.clip(sigma * np.random.randn(3, B, N, C), -1 * clip, clip)
         
         # Add to pointcloud
-        batch_tuples += jittered_data
-        return batch_tuples
+        pointclouds_tuples += jittered_data
+        return pointclouds_tuples
 
     @staticmethod
     def _rotate_pointclouds_up(batch_tuples):
@@ -166,7 +190,13 @@ class GenericData(object):
 
 class ModelnetData(GenericData) : 
     """
-    Class implementing all needed functionality with modelnet data manipulation.
+    Class implementing all needed functionality with modelnet data manipulation. The generator
+    returns 3 pointclouds: anchor, permuted anchor and 
+    """
+    
+    CLASSES_COUNT = 40
+    """
+    How many classes do we have in the modelnet dataset.
     """
 
     def __init__(self):
@@ -175,7 +205,7 @@ class ModelnetData(GenericData) :
         is no needed files, we would download them directly form the stanford website.
         """
         # super
-        super(ModelnetData,self).__init__()
+        super(ModelnetData, self).__init__()
         # download data if it's needed
         if not os.path.exists(df.DATA_MODELNET_DIR):
             zipfile = os.path.basename(df.DATA_URL)
@@ -187,10 +217,10 @@ class ModelnetData(GenericData) :
         self.train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
         self.test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
 
-    def generate_train_tripples(self, batch_size,
-                                shuffle_files=False, shuffle_pointclouds=False,
-                                jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                rotate_pointclouds_rand=False, reshape_flags=[]):
+    def generate_random_tripples(self, batch_size,
+                                 shuffle_files=False, shuffle_pointclouds=False,
+                                 jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                 rotate_pointclouds_rand=False, reshape_flags=[]):
         """ 
         Generator returns 3 point clouds A (anchor), P (positive), N (negative).
     
@@ -245,7 +275,7 @@ class ModelnetData(GenericData) :
 
                 # jitter
                 if jitter_pointclouds:
-                    batch_data = ModelnetData._jitter_pointclouds(batch_data)
+                    batch_data = ModelnetData._jitter_pointclouds_tuples(batch_data)
                 # rotate
                 if rotate_pointclouds_up:
                     batch_data = ModelnetData._rotate_pointclouds_up(batch_data)
@@ -259,7 +289,101 @@ class ModelnetData(GenericData) :
 
                 # yield
                 yield batch_data
+
+    def generate_representative_batch(self, batch_size=256,  # 6 identities per batch
+                                      shuffle_files=False, shuffle_pointclouds=False,
+                                      jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                      rotate_pointclouds_rand=False, reshape_flags=[]):
+        """ 
+        Generator returns 3 point clouds A (anchor), P (positive), N (negative).
     
+        Args:
+            batch_size (int): Size of a batch, please consider we assume every object should appear
+                at least once in the batch, so recommended batch size is 256 with 6 identities per batch.
+            shuffle_files (boolean): Should we shuffle train files?
+            shuffle_pointclouds (boolean): Should we shuffle pointclouds for each file?
+            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
+            rotate_pointclouds_up (boolean): Rotate pointclouds with random angle around up axis,
+                but this axis has to contain (0,0) point.
+            rotate_pointclouds_rand (boolean): Rotate pointclouds with random angle around
+                random axis, but this axis has to contain (0,0) point.
+            reshape_flags (list of str): Output pointclouds are in the default shape of
+                [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
+                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
+                    would be [batch_size, N*3]
+        Returns:
+            (list of np.ndarray, list of np.ndarray): list of representative batch with pointclouds and labels.
+        """
+
+        # shuffle train files
+        train_file_idxs = np.arange(0, len(self.train_files))
+        if shuffle_files:
+            np.random.shuffle(train_file_idxs)
+
+        # iterate over all files
+        for idx in range(len(self.train_files)):
+            # load pointclouds
+            pointclouds, labels = ModelnetData._load_h5_file(self.train_files[train_file_idxs[idx]])
+            # shuffle pointclouds
+            if shuffle_pointclouds:
+                pointclouds, labels, _ = ModelnetData._shuffle_data_with_labels(pointclouds, labels)
+            # batch_size calc
+            indentities_per_batch = int(np.floor(batch_size / self.CLASSES_COUNT))
+            batch_count = int(math.floor(pointclouds.shape[0] / batch_size))
+            # classes_indices
+            classes_indices = {}
+            labels = np.squeeze(labels)
+            for idx in range(0, self.CLASSES_COUNT):
+                classes_indices[idx] = np.squeeze(np.argwhere(labels == idx))
+            # iterate over all batches
+            for _ in range(batch_count):
+                
+                # batch_data
+                batch_pointclouds = []
+                batch_labels = []
+                
+                # iterate over all classes
+                for label_idx in range(self.CLASSES_COUNT):
+                    
+                    # how many identities
+                    for i in range(0, indentities_per_batch):
+                        if len(classes_indices[label_idx]):
+                            cloud = pointclouds[classes_indices[label_idx][0]]
+                            label = labels[classes_indices[label_idx][0]]
+                            classes_indices[label_idx] = classes_indices[label_idx][1:]
+                        else:
+                            cloud_idxs = np.squeeze(np.argwhere(labels == label_idx))
+                            cloud_idx = np.random.randint(len(cloud_idxs))
+                            cloud = pointclouds[cloud_idxs[cloud_idx]]
+                            label = labels[cloud_idxs[cloud_idx]]
+                        batch_pointclouds.append(ModelnetData._shuffle_data(cloud),)
+                        batch_labels.append(label)
+                
+                # fill to power of two
+                for i in range(batch_size - len(batch_pointclouds)):
+                    cloud_idx = np.random.randint(len(labels))
+                    cloud = pointclouds[cloud_idx]
+                    label = labels[cloud_idx]
+                    batch_pointclouds.append(ModelnetData._shuffle_data(cloud))
+                    batch_labels.append(label) 
+                    
+                # stack
+                batch_pointclouds = np.stack(batch_pointclouds, axis=0)
+                batch_labels = np.stack(batch_labels, axis=0)
+
+                # jitter
+                if jitter_pointclouds:
+                    batch_pointclouds = ModelnetData._jitter_pointclouds(batch_pointclouds)
+                # rotate
+                if rotate_pointclouds_up:
+                    raise NotImplementedError
+                # reshape
+                if "flatten_pointclouds" in reshape_flags:
+                    batch_pointclouds = np.reshape(batch_pointclouds, [batch_size, -1])
+
+                # yield
+                yield batch_pointclouds, batch_labels
+
     @staticmethod
     def _get_filenames(filepath):
         """
@@ -295,7 +419,7 @@ class SyntheticData(GenericData):
         Default constructor.
         """
         # super
-        super(SyntheticData,self).__init__()
+        super(SyntheticData, self).__init__()
         if not os.path.exists(df.DATA_SYNTHETIC_DIR):
             os.mkdir(df.DATA_SYNTHETIC_DIR)
 
@@ -390,7 +514,7 @@ class SyntheticData(GenericData):
 
             # jitter
             if jitter_pointclouds:
-                batch_data = SyntheticData._jitter_pointclouds(batch_data)
+                batch_data = SyntheticData._jitter_pointclouds_tuples(batch_data)
             # rotate
             if rotate_pointclouds_up:
                 batch_data = SyntheticData._rotate_pointclouds_up(batch_data)

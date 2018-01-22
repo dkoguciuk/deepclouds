@@ -10,11 +10,11 @@ import sys
 import argparse
 import tensorflow as tf
 import siamese_pointnet.defines as df
-from siamese_pointnet.model import Model
+from siamese_pointnet.model import MLPModel, RNNBidirectionalModel
 import siamese_pointnet.modelnet_data as modelnet
 
 def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
-                   layers_sizes=[2048, 1024, 512, 256, 128],
+                   layers_sizes=[2048, 128],
                    initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
     Train siamese pointnet.
@@ -25,11 +25,12 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
 
     # Define model
     with tf.device(device):
-        model = Model(layers_sizes, batch_size, learning_rate,
-                      initialization_method, hidden_activation, output_activation, margin)
+        model = RNNBidirectionalModel(layers_sizes, batch_size, learning_rate,
+                                      # initialization_method, hidden_activation, output_activation,
+                                      margin)
 
     # Session
-    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+    config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
     with tf.Session(config=config) as sess:
 
         # Run the initialization
@@ -47,9 +48,13 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
  
             # loop for all batches
             index = 1
-            for clouds in modelnet_data.generate_train_tripples(batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                                                jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                                                reshape_flags=["flatten_pointclouds"]):
+            for pointclouds, labels in modelnet_data.generate_representative_batch(batch_size=batch_size, shuffle_files=False, shuffle_pointclouds=False,
+                                                                                   jitter_pointclouds=False, rotate_pointclouds_up=False,
+                                                                                   reshape_flags=["flatten_pointclouds"]):
+ 
+                # count embeddings
+                embeddings = sess.run(model.count_embeddings(), feed_dict={model.input_a: clouds})
+                exit()
  
                 # run optimizer
                 summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
@@ -60,10 +65,7 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
                 global_batch_idx += 1
                  
                 # Info
-                print "Epoch: ", epoch + 1, " batch: ", index, " loss: ", loss
-                if loss > 10 ** -6:
-                    with open(loss_file, "a") as myfile:
-                        myfile.write(str(loss) + "\n")
+                print "Epoch: ", epoch + 1, " batch: ", index  # , " loss: ", loss
                 index += 1
 
 def main(argv):
@@ -71,7 +73,7 @@ def main(argv):
     # Parser
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", help="Name of the run", type=str, required=True)
-    parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=32)
+    parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=256)
     parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=100)
     parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")

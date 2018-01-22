@@ -37,7 +37,10 @@ class GenericModel(object):
             Optimizer.
         """
         return self.optimizer
-    
+
+    def count_embeddings(self):
+        return self.embedding_a
+
     @classmethod
     def get_model_name(cls):
         """
