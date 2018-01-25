@@ -501,24 +501,42 @@ class SyntheticData(GenericData):
         """
         # super
         super(SyntheticData, self).__init__()
+
         if not os.path.exists(df.DATA_SYNTHETIC_DIR):
             os.mkdir(df.DATA_SYNTHETIC_DIR)
 
-    def check_generated_size(self):
+        self.train_dir_path = os.path.join(df.DATA_SYNTHETIC_DIR, "train")
+        if not os.path.exists(self.train_dir_path):
+            os.mkdir(self.train_dir_path)
+
+        self.test_dir_path = os.path.join(df.DATA_SYNTHETIC_DIR, "test")
+        if not os.path.exists(self.test_dir_path):
+            os.mkdir(self.test_dir_path)
+
+    def check_generated_size(self, train=True):
         """
         Returns size of generated data [num_of_pointclouds:num_of_points] or None if synthetic
         data is not generated yet.
 
+        Args:
+            train (bool): Do you want to know train or test dataset size?
+
         Returns:
             ([num_of_pointclouds:num_of_points]): Size of generated data or None.
         """
-        pointclouds_filenames = [filename for filename in os.listdir(df.DATA_SYNTHETIC_DIR) if filename.endswith(".npy")]
+        if train:
+            directory = self.train_dir_path
+        else: 
+            directory = self.test_dir_path
+
+        pointclouds_filenames = [filename for filename in os.listdir(directory) if filename.endswith(".npy")]
         if not pointclouds_filenames:
             return None
-        pointcloud = np.load(os.path.join(df.DATA_SYNTHETIC_DIR, pointclouds_filenames[0]))
+        pointcloud = np.load(os.path.join(directory, pointclouds_filenames[0]))
         return [len(pointclouds_filenames), pointcloud.shape[0]]
 
-    def regenerate_files(self, pointcloud_size=32, instances_per_class=100):
+    def regenerate_files(self, pointcloud_size=32,
+                         instances_per_class_train=100, instances_per_class_test=10):
         """
         Delete all synthetic data if present and generate new with specified params.
 
@@ -527,10 +545,11 @@ class SyntheticData(GenericData):
             pointclouds_amount (int): How many pointclouds to generate.
         """
         # remove old
-        pointclouds_filenames = [filename for filename in os.listdir(df.DATA_SYNTHETIC_DIR) if filename.endswith(".npy")]
-        for pointcloud_filename in pointclouds_filenames:
-            pointcloud_filepath = os.path.join(df.DATA_SYNTHETIC_DIR, pointcloud_filename)
-            os.remove(pointcloud_filepath)
+        for directory in [self.train_dir_path, self.test_dir_path]: 
+            pointclouds_filenames = [filename for filename in os.listdir(directory) if filename.endswith(".npy")]
+            for pointcloud_filename in pointclouds_filenames:
+                pointcloud_filepath = os.path.join(directory, pointcloud_filename)
+                os.remove(pointcloud_filepath)
         
         # Generate model classes
         clouds = []
@@ -541,16 +560,26 @@ class SyntheticData(GenericData):
             clouds.append(cloud)
         clouds = np.stack(clouds)
         
-        # Augment dataset and save
-        print "Generating %d synthetic pointclouds, each with %d 3D points.." % (instances_per_class*self.CLASSES_COUNT, pointcloud_size)
-        for instance_idx in range(0, instances_per_class):
+        # Augment dataset and save (train)
+        print "Generating %d synthetic pointclouds, each with %d 3D points.." % (instances_per_class_train*self.CLASSES_COUNT, pointcloud_size)
+        for instance_idx in range(0, instances_per_class_train):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_pointclouds_rand(clouds_new)          # rotate along random axis and random angle
             clouds_new = self._jitter_pointclouds(clouds_new)               # jitter points
             clouds_new = self._shuffle_points_in_pointclouds(clouds_new)    # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                     # save pointclouds
                 global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
-                cloud_path = os.path.join(df.DATA_SYNTHETIC_DIR, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
+                cloud_path = os.path.join(self.train_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
+                np.save(cloud_path, clouds_new[cloud_idx])
+
+        for instance_idx in range(0, instances_per_class_test):
+            clouds_new = np.copy(clouds)
+            clouds_new = self._rotate_pointclouds_rand(clouds_new)          # rotate along random axis and random angle
+            clouds_new = self._jitter_pointclouds(clouds_new)               # jitter points
+            clouds_new = self._shuffle_points_in_pointclouds(clouds_new)    # shuffle point in the pointcloud
+            for cloud_idx in range(self.CLASSES_COUNT):                     # save pointclouds
+                global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
+                cloud_path = os.path.join(self.test_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
                 np.save(cloud_path, clouds_new[cloud_idx])
 
     def generate_random_triples(self, batch_size, shuffle_pointclouds=False,
@@ -581,8 +610,8 @@ class SyntheticData(GenericData):
                 N - random permutation of cloud from another class
         """
         # trainfiles
-        pointclouds_filepaths = [os.path.join(df.DATA_SYNTHETIC_DIR, filename) for filename
-                                 in os.listdir(df.DATA_SYNTHETIC_DIR) if filename.endswith(".npy")]
+        pointclouds_filepaths = [os.path.join(self.train_dir_path, filename) for filename
+                                 in os.listdir(self.train_dir_path) if filename.endswith(".npy")]
         # shuffle train files
         if shuffle_pointclouds:
             np.random.shuffle(pointclouds_filepaths)
@@ -645,8 +674,55 @@ class SyntheticData(GenericData):
         """
 
         # trainfiles
-        pointclouds_filepaths = [os.path.join(df.DATA_SYNTHETIC_DIR, filename) for filename
-                                 in os.listdir(df.DATA_SYNTHETIC_DIR) if filename.endswith(".npy")]
+        pointclouds_filepaths = [os.path.join(self.train_dir_path, filename) for filename
+                                 in os.listdir(self.train_dir_path) if filename.endswith(".npy")]
+        
+        # sort 
+        pointclouds_indices = []
+        for filepath in pointclouds_filepaths:
+            start_idx = filepath.rfind("/") + 1
+            stop_idx = filepath.rfind("_")
+            pointclouds_indices.append(int(filepath[start_idx:stop_idx]))
+        pointclouds_filepaths = [path for _,path in sorted(zip(pointclouds_indices, pointclouds_filepaths))]
+
+        # iterate over batches
+        for batch_idx in range(int(len(pointclouds_filepaths) / batch_size)):
+            batch_clouds = []
+            batch_labels = []
+            for cloud_idx in range(batch_size):
+                global_idx = batch_idx * batch_size + cloud_idx
+                global_class = int(pointclouds_filepaths[global_idx][pointclouds_filepaths[global_idx].rfind("_") + 1 :
+                                                                     pointclouds_filepaths[global_idx].rfind(".")])
+                batch_clouds.append(np.load(pointclouds_filepaths[global_idx]))
+                batch_labels.append(global_class)
+            batch_clouds = np.stack(batch_clouds, axis=0)
+            batch_labels = np.stack(batch_labels, axis=0)
+            
+            # reshape
+            if "flatten_pointclouds" in reshape_flags:
+                batch_clouds = np.reshape(batch_clouds, [batch_size, -1])
+            
+           # yield
+            yield batch_clouds, batch_labels
+
+    def generate_test_batch(self, batch_size=64, reshape_flags=[]):
+        """ 
+        Generate pointclouds with labels from test directory.
+    
+        Args:
+            batch_size (int): Size of a batch, please consider we assume every object should appear
+                at least once in the batch, so recommended batch size is 256 with 6 identities per batch.
+            reshape_flags (list of str): Output pointclouds are in the default shape of
+                [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
+                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
+                    would be [batch_size, N*3]
+        Returns:
+            (list of np.ndarray, list of np.ndarray): list of representative batch with pointclouds and labels.
+        """
+
+        # trainfiles
+        pointclouds_filepaths = [os.path.join(self.test_dir_path, filename) for filename
+                                 in os.listdir(self.test_dir_path) if filename.endswith(".npy")]
         
         # sort 
         pointclouds_indices = []

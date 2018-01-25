@@ -66,12 +66,12 @@ class GenericModel(object):
         """ 
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=1)
+                pos_dist = tf.sqrt(tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=1))
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=1)
+                neg_dist = tf.sqrt(tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=1))
             with tf.name_scope("copute_loss"):
-                basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
-                final_loss = tf.reduce_mean(tf.maximum(basic_loss, 0.0))
+                basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
+                final_loss = tf.reduce_mean(basic_loss)
             return final_loss
 
     def _normalize_embedding(self, embedding):
@@ -381,6 +381,7 @@ class RNNBidirectionalModel(GenericModel):
                                                                            initial_states_bw=self.states['bw'],
                                                                            inputs=inputs[0], dtype=tf.float32,
                                                                            scope="anchor")
+                tf.summary.histogram("anchor_embedding", anr)
                 pos, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
                                                                            initial_states_fw=self.states['fw'],
                                                                            initial_states_bw=self.states['bw'],
@@ -421,7 +422,7 @@ class RNNBidirectionalModel(GenericModel):
                 AX = tf.reshape(inputs[0], [self.batch_size, -1])
                 for layer_idx in range(1, len(self.mlp_layers_sizes)):
                     with tf.name_scope("layer_" + str(layer_idx)):
-                        AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                        AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
                 ret = tf.stack([AX], axis=1)
             elif len(inputs) == 3:
                 outputs = []
@@ -429,19 +430,20 @@ class RNNBidirectionalModel(GenericModel):
                     AX = tf.reshape(inputs[0], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                    tf.summary.histogram("anchor_embedding", AX)
                     outputs.append(AX)
                 with tf.name_scope("positive"):
                     AX = tf.reshape(inputs[1], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
                     outputs.append(AX)
                 with tf.name_scope("negative"):
                     AX = tf.reshape(inputs[2], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
                     outputs.append(AX)
                 ret = tf.stack(outputs, axis=1)
             else:

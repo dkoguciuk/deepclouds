@@ -32,6 +32,10 @@ def find_hard_triples_to_train(embeddings, labels):
         # find hard negative
         other_indices = np.squeeze(np.argwhere(labels != class_idx))
         hard_negatives_indices.append(other_indices[np.argmin(np.take(distances, other_indices))])
+        
+        if cloud_idx == 0:
+            print "POSITIVE MAX DIST ", distances[class_indices[np.argmax(np.take(distances, class_indices))]]
+            print "NEGATIVE MIN DIST ", distances[other_indices[np.argmin(np.take(distances, other_indices))]]
 
     return hard_positives_indices, hard_negatives_indices
 
@@ -86,12 +90,17 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
                 # Find hard examples to train on
                 pos_indices, neg_indices = find_hard_triples_to_train(embeddings, labels)
                 
+                # Print info
+                #print embeddings[0], embeddings[pos_indices[0]], embeddings[neg_indices[0]]
+                print np.sum((embeddings[0]-embeddings[pos_indices[0]])**2), np.sum((embeddings[0]-embeddings[neg_indices[0]])**2)
+                print np.sum((embeddings[0]-embeddings[pos_indices[0]])**2) - np.sum((embeddings[0]-embeddings[neg_indices[0]])**2) + 0.2
+                
                 # Create triples to train
                 pos_clouds = np.copy(clouds)
                 pos_clouds = pos_clouds[pos_indices, ...]
                 neg_clouds = np.copy(clouds)
                 neg_clouds = neg_clouds[neg_indices, ...]
-                training_input = np.stack([clouds, pos_clouds, neg_clouds], axis =1 )
+                training_input = np.stack([clouds, pos_clouds, neg_clouds], axis =1)
                 
                 # run optimizer
                 _, loss, summary = sess.run([model.get_optimizer(), model.get_loss_function(), model.get_summary()],
