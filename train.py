@@ -14,7 +14,7 @@ from siamese_pointnet.model import MLPModel, RNNBidirectionalModel
 import siamese_pointnet.modelnet_data as modelnet
 
 def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
-                   layers_sizes=[2048, 128],
+                   layers_sizes=[2048, 512, 128],
                    initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
     Train siamese pointnet.
@@ -27,7 +27,7 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
     with tf.device(device):
         model = RNNBidirectionalModel(layers_sizes, batch_size, learning_rate,
                                       # initialization_method, hidden_activation, output_activation,
-                                      margin)
+                                      margin, pointcloud_size=2048)
 
     # Session
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
@@ -49,31 +49,32 @@ def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
             # loop for all batches
             index = 1
             for pointclouds, labels in modelnet_data.generate_representative_batch(batch_size=batch_size, shuffle_files=False, shuffle_pointclouds=False,
-                                                                                   jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                                                                   reshape_flags=["flatten_pointclouds"]):
+                                                                                   jitter_pointclouds=False, rotate_pointclouds_up=False):
+                                                                                   #reshape_flags=["flatten_pointclouds"]):
  
                 # count embeddings
-                embeddings = sess.run(model.count_embeddings(), feed_dict={model.input_a: clouds})
+                embeddings = sess.run(model.count_embeddings(), feed_dict={model.input_a: pointclouds})
+                print type(embeddings), embeddings.shape
                 exit()
- 
-                # run optimizer
-                summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
-                                                     feed_dict={model.input_a: clouds[0],
-                                                                model.input_p: clouds[1],
-                                                                model.input_n: clouds[2]})
-                writer.add_summary(summary_train_batch, global_batch_idx)
-                global_batch_idx += 1
-                 
-                # Info
-                print "Epoch: ", epoch + 1, " batch: ", index  # , " loss: ", loss
-                index += 1
+#  
+#                 # run optimizer
+#                 summary_train_batch, loss = sess.run([model.get_summary(), model.get_loss_function()],
+#                                                      feed_dict={model.input_a: clouds[0],
+#                                                                 model.input_p: clouds[1],
+#                                                                 model.input_n: clouds[2]})
+#                 writer.add_summary(summary_train_batch, global_batch_idx)
+#                 global_batch_idx += 1
+#                  
+#                 # Info
+#                 print "Epoch: ", epoch + 1, " batch: ", index  # , " loss: ", loss
+#                 index += 1
 
 def main(argv):
 
     # Parser
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", help="Name of the run", type=str, required=True)
-    parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=256)
+    parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=64)
     parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=100)
     parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")

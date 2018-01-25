@@ -1,4 +1,6 @@
+import numpy as np
 import tensorflow as tf
+from debian.debtags import output
 
 class GenericModel(object):
     """
@@ -38,9 +40,6 @@ class GenericModel(object):
         """
         return self.optimizer
 
-    def count_embeddings(self):
-        return self.embedding_a
-
     @classmethod
     def get_model_name(cls):
         """
@@ -65,10 +64,15 @@ class GenericModel(object):
         Returns:
             (tensor): Loss function.
         """ 
-        pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=1)
-        neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=1)
-        basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
-        return tf.reduce_mean(tf.maximum(basic_loss, 0.0))  # / batch_size
+        with tf.name_scope("triplet_loss"):
+            with tf.name_scope("dist_pos"):
+                pos_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_p), axis=1)
+            with tf.name_scope("dist_neg"):
+                neg_dist = tf.reduce_sum(tf.squared_difference(embedding_a, embedding_n), axis=1)
+            with tf.name_scope("copute_loss"):
+                basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), margin)
+                final_loss = tf.reduce_mean(tf.maximum(basic_loss, 0.0))
+            return final_loss
 
     def _normalize_embedding(self, embedding):
         """
@@ -227,118 +231,242 @@ class RNNBidirectionalModel(GenericModel):
     Name of the model, which will be used as a directory for tensorboard logs. 
     """
 
-    def __init__(self, layers_sizes, batch_size, learning_rate,
-                 margin, normalize_embedding=True, pointcloud_size=16):
+    CLASSES_COUNT = 40
+    """
+    How many classes do we have in the modelnet dataset.
+    """
+
+    def __init__(self, rnn_layers_sizes, mlp_layers_sizes, batch_size, learning_rate, margin, pointcloud_size=16):
         """
         Build a model.
         Args:
-            layers_sizes (list of ints): List of hidden units of mlp, but without the first input layer which is POINTCLOUD_SIZE.
+            rnn_layers_sizes (list of ints): List of hidden units of rnn.
+            mlp_layers_sizes (list of ints): List of hidden units of mlp built on top of rnn -- first
+                val of mlp_layers_sizes must match 2*rnn_last_value*pointcloud_size
             batch_size (int): Batch size of SGD.
             learning_rate (float): Learning rate of SGD.
             margin (float): Learning margin.
-            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
             pointcloud_size (int): Number of 3D points in the pointcloud.
         """
-
-        # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
-        self.input_a = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_a")
-        self.input_p = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_p")
-        self.input_n = tf.placeholder(tf.float32, [batch_size, pointcloud_size, 3], name="input_n")
         
-        # Multilayer bidirectional LSTM
-        cells = {'a' : { 'fw' : [], 'bw' : []},
-                 'p' : { 'fw' : [], 'bw' : []},
-                 'n' : { 'fw' : [], 'bw' : []}}
-        states = {'a' : { 'fw' : [], 'bw' : []},
-                  'p' : { 'fw' : [], 'bw' : []},
-                  'n' : { 'fw' : [], 'bw' : []}}
-        for layers in layers_sizes:
+        # assert
+        if mlp_layers_sizes[0] != 2*rnn_layers_sizes[-1]*pointcloud_size:
+            raise ValueError("first val of mlp_layers_sizes must match 2*rnn_last_value*pointcloud_size")
+        
+        # Save params
+        self.batch_size = batch_size
+        self.rnn_layers_sizes = rnn_layers_sizes
+        self.mlp_layers_sizes = mlp_layers_sizes
+        self.pointcloud_size = pointcloud_size
+        self.learning_rate = learning_rate
+        self.margin = margin
+        
+        # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
+        with tf.name_scope("placeholders"):
+            self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
+            self.placeholder_train = tf.placeholder(tf.float32, [self.batch_size, 3, self.pointcloud_size, 3], name="input_training")
+
+        # init RNN and MLP params
+        with tf.name_scope("params"):
+            self._init_params()
+        
+        # calculate embedding
+        with tf.name_scope("find_hard_triplets"):
+            self.embeddings = tf.squeeze(self._calculate_embeddings(self.placeholder_embdg))
+        
+        # calculate loss & optimizer
+        with tf.name_scope("train"):
+            self.train_embd = self._calculate_embeddings(self.placeholder_train)
+            self.loss = self._calculate_loss(self.train_embd)
+            self.optimizer = self._define_optimizer(self.loss)
+            tf.summary.scalar('loss', self.loss)
+        
+        # merge summaries and write        
+        self.summary = tf.summary.merge_all()
+
+    def get_embeddings(self):
+        """
+        Get embeddings to be run with a batch of a single pointclouds to find hard triplets to train. 
+        """
+        return self.embeddings
+
+    def _init_params(self):
+        """
+        Initialize params for RNN and MLP networks used later.
+        """
+        
+        # Define RNN params
+        self.cells = { 'fw' : [], 'bw' : []}
+        self.states = { 'fw' : [], 'bw' : []}
+        for layers in self.rnn_layers_sizes:
 
             # Layer
-            cell_fw_a = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_bw_a = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_fw_p = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_bw_p = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_fw_n = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_bw_n = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_fw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_bw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
             
-            cells['a']['fw'].append(cell_fw_a)
-            cells['a']['bw'].append(cell_bw_a)
-            cells['p']['fw'].append(cell_fw_p)
-            cells['p']['bw'].append(cell_bw_p)
-            cells['n']['fw'].append(cell_fw_n)
-            cells['n']['bw'].append(cell_bw_n)
+            self.cells['fw'].append(cell_fw)
+            self.cells['bw'].append(cell_bw)
             
             # State
-            state_fw_a = cell_fw_a.zero_state(batch_size, tf.float32)
-            state_bw_a = cell_bw_a.zero_state(batch_size, tf.float32)
-            state_fw_p = cell_fw_p.zero_state(batch_size, tf.float32)
-            state_bw_p = cell_bw_p.zero_state(batch_size, tf.float32)
-            state_fw_n = cell_fw_n.zero_state(batch_size, tf.float32)
-            state_bw_n = cell_bw_n.zero_state(batch_size, tf.float32)
+            state_fw = cell_fw.zero_state(self.batch_size, tf.float32)
+            state_bw = cell_bw.zero_state(self.batch_size, tf.float32)
             
-            states['a']['fw'].append(state_fw_a)
-            states['a']['bw'].append(state_bw_a)
-            states['p']['fw'].append(state_fw_p)
-            states['p']['bw'].append(state_bw_p)
-            states['n']['fw'].append(state_fw_n)
-            states['n']['bw'].append(state_bw_n)
-
-         # Get layer output
-        output_a, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['a']['fw'], cells['a']['bw'],
-                                                         initial_states_fw=states['a']['fw'],
-                                                         initial_states_bw=states['a']['bw'],
-                                                         inputs=self.input_a, dtype=tf.float32,
-                                                         scope='BLSTMA')
-        output_p, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['p']['fw'], cells['p']['bw'],
-                                                         initial_states_fw=states['p']['fw'],
-                                                         initial_states_bw=states['p']['bw'],
-                                                         inputs=self.input_p, dtype=tf.float32,
-                                                         scope='BLSTMP')
-        output_n, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells['n']['fw'], cells['n']['bw'],
-                                                         initial_states_fw=states['n']['fw'],
-                                                         initial_states_bw=states['n']['bw'],
-                                                         inputs=self.input_n, dtype=tf.float32,
-                                                         scope='BLSTMN')
-
-        # Define weights
-        weights = {
-            # Hidden layer weights => 2*n_hidden because of forward + backward cells
-            'out': tf.Variable(tf.random_normal([2 * layers_sizes[-1], 1]))
-        }
-        biases = {
-            'out': tf.Variable(tf.random_normal([1]))
-        }
-
-        # Build forward propagation
-        # Linear activation, using rnn inner loop last output
-        with tf.name_scope("anchor_embedding"):
-            output_list = tf.unstack(output_a, axis=0)
-            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
-            self.embedding_a = tf.stack(embeddings, axis=0)
-            if normalize_embedding:
-                self.embedding_a = self._normalize_embedding(self.embedding_a)
-            tf.summary.histogram("anchor_embedding", self.embedding_a)
-        with tf.name_scope("positive_embedding"):
-            output_list = tf.unstack(output_p, axis=0)
-            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
-            self.embedding_p = tf.stack(embeddings, axis=0)
-            if normalize_embedding:
-                self.embedding_p = self._normalize_embedding(self.embedding_p)
-            tf.summary.histogram("positive_embedding", self.embedding_p)
-        with tf.name_scope("negative_embedding"):
-            output_list = tf.unstack(output_n, axis=0)
-            embeddings = [tf.squeeze(tf.matmul(output, weights['out']) + biases['out']) for output in output_list]
-            self.embedding_n = tf.stack(embeddings, axis=0)
-            if normalize_embedding:
-                self.embedding_n = self._normalize_embedding(self.embedding_n)
-            tf.summary.histogram("negative_embedding", self.embedding_n)
+            self.states['fw'].append(state_fw)
+            self.states['bw'].append(state_bw)
         
-       # Define Loss function
-        with tf.name_scope("batch_training"):
-            self.loss = self._tripplet_loss(self.embedding_a, self.embedding_p, self.embedding_n, margin, batch_size)
-            tf.summary.scalar("batch_cost", self.loss)
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss)
+        # Define MLP params
+        self.params = {}
+        for layer_idx in range(1, len(self.mlp_layers_sizes)):
+            self.params['W' + str(layer_idx)] = tf.get_variable('W' + str(layer_idx), 
+                                                                [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
+                                                                initializer = tf.contrib.layers.xavier_initializer(), )
+            self.params["b" + str(layer_idx)] = tf.get_variable("b" + str(layer_idx),
+                                                                [self.mlp_layers_sizes[layer_idx]],
+                                                                initializer = tf.zeros_initializer())
 
-        # Summary merge
-        self.summary = tf.summary.merge_all()
+    def _calculate_embeddings(self, input):
+        """
+        Calculate embeddings for clouds stored in the input variable. This method would be called
+        for both embeddings calculation for futher hard triples finding and for final training step
+        so one can pass here either np.ndarray of shape [batch_size, 1, N, 3] or [batch_size, 3, N, 3].
+
+        Args:
+            input (np.ndarray of shape [B, X, N, 3]): input pointclouds, where B: batch size, X: 1
+                (one pointcloud) or 3 (triplet of pointclouds), N: number of points in each pointcloud.
+        Returns:
+            (np.ndaray of shape [B, X, E]): embedding of each cloud, where B: batch_size, X: 1 (one
+                pointcloud) or 3 (triplet of pointclouds), E: size of an embedding of a pointcloud.
+        """
+
+        with tf.name_scope("calculate_embeddings"):
+
+            # rnn forward prop
+            rnn_output = self._forward_rnn(input)
+            
+            # mlp forward prop
+            mlp_output = self._forward_mlp(rnn_output)
+            
+            # mlp forward prop
+            return mlp_output
+
+    def _forward_rnn(self, input):
+        """
+        Calculate forward propagation of a RNN.
+
+        Args:
+            input (np.ndarray of shape [B, X, N, 3]): input pointclouds, where B: batch size, X: 1
+                (one pointcloud) or 3 (triplet of pointclouds), N: number of points in each pointcloud.
+        Returns:
+            (np.ndaray of shape [B, X, N, R]): embedding of each cloud, where B: batch_size, X: 1 (one
+                pointcloud) or 3 (triplet of pointclouds), N: number of points in each pointcloud,
+                R: number of features for every point.  
+        """
+
+        with tf.name_scope("rnn"):
+
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+            
+            if len(inputs) == 1:
+                out, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
+                                                                           initial_states_fw=self.states['fw'],
+                                                                           initial_states_bw=self.states['bw'],
+                                                                           inputs=inputs[0], dtype=tf.float32,
+                                                                           scope="rnn")
+                ret = tf.stack([out], axis=1)
+            elif len(inputs) == 3:
+                anr, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
+                                                                           initial_states_fw=self.states['fw'],
+                                                                           initial_states_bw=self.states['bw'],
+                                                                           inputs=inputs[0], dtype=tf.float32,
+                                                                           scope="anchor")
+                pos, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
+                                                                           initial_states_fw=self.states['fw'],
+                                                                           initial_states_bw=self.states['bw'],
+                                                                           inputs=inputs[1], dtype=tf.float32,
+                                                                           scope="positive")
+                neg, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
+                                                                           initial_states_fw=self.states['fw'],
+                                                                           initial_states_bw=self.states['bw'],
+                                                                           inputs=inputs[2], dtype=tf.float32,
+                                                                           scope="negative")
+                ret = tf.stack([anr, pos, neg], axis=1)
+            else:
+                raise ValueError("I cannot handle this!")
+            
+            # return
+            return ret 
+
+    def _forward_mlp(self, input):
+        """
+        Calculate forward propagation of a MLP.
+
+        Args:
+            input (np.ndaray of shape [B, X, N, R]): embedding of each cloud, where B: batch_size,
+                X: 1 (one pointcloud) or 3 (triplet of pointclouds), N: number of points in each
+                pointcloud, R: number of features for every point. 
+        Returns:
+            (np.ndaray of shape [B, X, E]): embedding of each cloud, where B: batch_size, X: 1 (one
+                pointcloud) or 3 (triplet of pointclouds), E: size of an embedding of a pointcloud.
+        """
+
+        with tf.name_scope("mlp"):
+
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+            
+            if len(inputs) == 1:
+                AX = tf.reshape(inputs[0], [self.batch_size, -1])
+                for layer_idx in range(1, len(self.mlp_layers_sizes)):
+                    with tf.name_scope("layer_" + str(layer_idx)):
+                        AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                ret = tf.stack([AX], axis=1)
+            elif len(inputs) == 3:
+                outputs = []
+                with tf.name_scope("anchor"):
+                    AX = tf.reshape(inputs[0], [self.batch_size, -1])
+                    for layer_idx in range(1, len(self.mlp_layers_sizes)):
+                        with tf.name_scope("layer_" + str(layer_idx)):
+                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                    outputs.append(AX)
+                with tf.name_scope("positive"):
+                    AX = tf.reshape(inputs[1], [self.batch_size, -1])
+                    for layer_idx in range(1, len(self.mlp_layers_sizes)):
+                        with tf.name_scope("layer_" + str(layer_idx)):
+                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                    outputs.append(AX)
+                with tf.name_scope("negative"):
+                    AX = tf.reshape(inputs[2], [self.batch_size, -1])
+                    for layer_idx in range(1, len(self.mlp_layers_sizes)):
+                        with tf.name_scope("layer_" + str(layer_idx)):
+                            AX = tf.nn.relu(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                    outputs.append(AX)
+                ret = tf.stack(outputs, axis=1)
+            else:
+                raise ValueError("I cannot handle this!")
+        
+            # return
+            return ret 
+    
+    def _calculate_loss(self, embeddings):
+        """
+        Calculate loss.
+
+        Args:
+            embeddings (np.ndaray of shape [B, 3, E]): embedding of each cloud, where
+                B: batch_size, E: size of an embedding of a pointcloud.
+        Returns:
+            (float): Loss of current batch.
+        """
+        with tf.name_scope("loss"):
+            embeddings_list = tf.unstack(embeddings, axis=1)
+            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+
+    def _define_optimizer(self, loss_function):
+        """
+        Define optimizer operation.
+        """
+        with tf.name_scope("optimizer"):
+            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
