@@ -49,8 +49,15 @@ LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 Directory for logs for tensorboard.
 """
 
+MODELS_DIR = os.path.join(ROOT_DIR, "models")
+"""
+Directory for models saving and restoring.
+"""
+
 # Create all needed dirs
 if not os.path.exists(DATA_DIR):
     os.mkdir(DATA_DIR)
 if not os.path.exists(LOGS_DIR):
     os.mkdir(LOGS_DIR)
+if not os.path.exists(MODELS_DIR):
+    os.mkdir(MODELS_DIR)

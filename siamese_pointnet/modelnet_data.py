@@ -495,9 +495,12 @@ class SyntheticData(GenericData):
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self):
+    def __init__(self, pointcloud_size):
         """
         Default constructor.
+
+        Args:
+            pointcloud_size (int): Number of 3D points in the generated data.
         """
         # super
         super(SyntheticData, self).__init__()
@@ -512,6 +515,11 @@ class SyntheticData(GenericData):
         self.test_dir_path = os.path.join(df.DATA_SYNTHETIC_DIR, "test")
         if not os.path.exists(self.test_dir_path):
             os.mkdir(self.test_dir_path)
+
+        self.pointcloud_size = pointcloud_size
+        actual_pc_size = self.check_generated_size()
+        if not actual_pc_size or actual_pc_size[1] != self.pointcloud_size:
+            self.regenerate_files()
 
     def check_generated_size(self, train=True):
         """
@@ -535,8 +543,7 @@ class SyntheticData(GenericData):
         pointcloud = np.load(os.path.join(directory, pointclouds_filenames[0]))
         return [len(pointclouds_filenames), pointcloud.shape[0]]
 
-    def regenerate_files(self, pointcloud_size=32,
-                         instances_per_class_train=100, instances_per_class_test=10):
+    def regenerate_files(self, instances_per_class_train=100, instances_per_class_test=10):
         """
         Delete all synthetic data if present and generate new with specified params.
 
@@ -554,14 +561,14 @@ class SyntheticData(GenericData):
         # Generate model classes
         clouds = []
         for cloud_idx in range(0, self.CLASSES_COUNT):
-            cloud = np.random.rand(pointcloud_size, 3)          # generate random
+            cloud = np.random.rand(self.pointcloud_size, 3)          # generate random
             cloud -= np.mean(cloud, axis=0)                     # zero the mean
             cloud /= np.max(np.linalg.norm(cloud, axis=1))     # normalize to unit sphere
             clouds.append(cloud)
         clouds = np.stack(clouds)
         
         # Augment dataset and save (train)
-        print "Generating %d synthetic pointclouds, each with %d 3D points.." % (instances_per_class_train*self.CLASSES_COUNT, pointcloud_size)
+        print "Generating %d synthetic pointclouds, each with %d 3D points.." % (instances_per_class_train*self.CLASSES_COUNT, self.pointcloud_size)
         for instance_idx in range(0, instances_per_class_train):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_pointclouds_rand(clouds_new)          # rotate along random axis and random angle

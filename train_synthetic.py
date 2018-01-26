@@ -7,15 +7,16 @@
 
 import os
 import sys
+import shutil
 import argparse
 import numpy as np
 import tensorflow as tf
 import siamese_pointnet.defines as df
-from siamese_pointnet.model import RNNBidirectionalModel, MLPModel
 import siamese_pointnet.modelnet_data as modelnet
+from siamese_pointnet.classifiers import MLPClassifier
+from siamese_pointnet.model import RNNBidirectionalModel, MLPModel
 
 CLOUD_SIZE = 32
-
 
 def find_hard_triples_to_train(embeddings, labels):
     hard_positives_indices = []
@@ -32,16 +33,12 @@ def find_hard_triples_to_train(embeddings, labels):
         # find hard negative
         other_indices = np.squeeze(np.argwhere(labels != class_idx))
         hard_negatives_indices.append(other_indices[np.argmin(np.take(distances, other_indices))])
-        
-        if cloud_idx == 0:
-            print "POSITIVE MAX DIST ", distances[class_indices[np.argmax(np.take(distances, class_indices))]]
-            print "NEGATIVE MIN DIST ", distances[other_indices[np.argmin(np.take(distances, other_indices))]]
 
     return hard_positives_indices, hard_negatives_indices
 
-def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
-                    layers_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE, 1],
-                    initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
+def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, margin, device,
+                                        layers_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE, 1],
+                                        initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
     Train siamese pointnet with synthetic data.
     """
@@ -50,17 +47,12 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
     tf.reset_default_graph()
 
     # Generate data if needed
-    data_gen = modelnet.SyntheticData()
-    data_gen_size = data_gen.check_generated_size()
-    if not data_gen_size:
-        data_gen.regenerate_files(pointcloud_size=CLOUD_SIZE)
+    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
 
     # Define model
     with tf.device(device):
-        model = RNNBidirectionalModel([CLOUD_SIZE * 3, CLOUD_SIZE, 8], [2*8*CLOUD_SIZE, CLOUD_SIZE/2], batch_size, learning_rate,
-        # model = MLPModel(layers_sizes, batch_size, learning_rate,
-        #                 initialization_method, hidden_activation, output_activation,
-                         margin, pointcloud_size=CLOUD_SIZE)
+        model = RNNBidirectionalModel([CLOUD_SIZE * 3, 40], [2*40*CLOUD_SIZE, 40],
+                                      batch_size, learning_rate, margin, pointcloud_size=CLOUD_SIZE)
 
     # Session
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
@@ -81,7 +73,6 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
             # loop for all batches
             index = 1
             for clouds, labels in data_gen.generate_representative_batch(batch_size):
-                                                                         #reshape_flags=["flatten_pointclouds"]):
 
                 # count embeddings
                 embedding_input = np.stack([clouds], axis=1)
@@ -89,11 +80,6 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
                 
                 # Find hard examples to train on
                 pos_indices, neg_indices = find_hard_triples_to_train(embeddings, labels)
-                
-                # Print info
-                #print embeddings[0], embeddings[pos_indices[0]], embeddings[neg_indices[0]]
-                print np.sum((embeddings[0]-embeddings[pos_indices[0]])**2), np.sum((embeddings[0]-embeddings[neg_indices[0]])**2)
-                print np.sum((embeddings[0]-embeddings[pos_indices[0]])**2) - np.sum((embeddings[0]-embeddings[neg_indices[0]])**2) + 0.2
                 
                 # Create triples to train
                 pos_clouds = np.copy(clouds)
@@ -114,6 +100,131 @@ def train_synthetic(name, batch_size, epochs, learning_rate, margin, device,
                 # Info
                 print "Epoch: %06d batch: %03d loss: %06f" % (epoch + 1, index, loss)
                 index += 1
+        
+        # Save model
+        save_path = model.save_model(sess)
+        print "Model saved in file: %s" % save_path
+        
+        print "W1 : %s" % model.mlp_params["W1"].eval()
+
+def train_synthetic_classification(name, batch_size, epochs, learning_rate, device):
+    """
+    Train siamese pointnet classificator with synthetic data.
+    """
+
+    # Reset
+    tf.reset_default_graph()
+
+    # Generate data if needed
+    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+
+    # Define model
+    with tf.device(device):
+        model_features = RNNBidirectionalModel([CLOUD_SIZE * 3, 40], [2*40*CLOUD_SIZE, 40],
+                                               batch_size, learning_rate, 0.2, pointcloud_size=CLOUD_SIZE)  
+
+    # Saver
+    saver = tf.train.Saver()
+
+    # Define model
+    with tf.device(device):
+        model_classifier = MLPClassifier([40, 40, 40, 40], batch_size, learning_rate)
+
+    config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
+    with tf.Session(config=config) as sess:
+
+        # Run the initialization
+        sess.run(tf.global_variables_initializer())
+         
+        # saver    
+        saver.restore(sess, tf.train.latest_checkpoint('models'))
+        
+        # Logs
+        log_model_dir = os.path.join(df.LOGS_DIR, model_classifier.get_model_name())
+        writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
+        writer.add_graph(sess.graph)
+        
+        # Do the training loop
+        global_batch_idx = 1
+        summary_skip_batch = 1
+        for epoch in range(epochs):
+
+            # loop for all batches
+            index = 1
+            for clouds, labels in data_gen.generate_representative_batch(batch_size):
+            
+                # count embeddings
+                embedding_input = np.stack([clouds], axis=1)
+                embeddings = sess.run(model_features.get_embeddings(), feed_dict={model_features.placeholder_embdg: embedding_input})
+                
+                # run optimizer
+                new_labels = sess.run(tf.one_hot(labels, 40))
+                _, loss, pred, summary = sess.run([model_classifier.get_optimizer(), model_classifier.get_loss_function(),
+                                             model_classifier.get_classification_prediction(), model_classifier.get_summary()],
+                                   feed_dict={model_classifier.placeholder_dupa: embeddings,
+                                              model_classifier.placeholder_label: new_labels})
+ 
+                
+ 
+                #print pred[0], labels[0]
+                #print "PREDICTED: %02d REAL: %02d" % (np.argmax(pred, axis=1)[0], labels[0])
+                #exit()
+
+                # Tensorboard vis
+                if global_batch_idx % summary_skip_batch == 0:
+                    writer.add_summary(summary, global_batch_idx)
+                global_batch_idx += 1
+
+                # Info
+                print "Epoch: %06d batch: %03d loss: %06f" % (epoch + 1, index, loss)
+                index += 1
+
+def save_embeddings(device):
+    # Reset
+    tf.reset_default_graph()
+
+    # Generate data if needed
+    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+
+    # Define model
+    with tf.device(device):
+        model_features = RNNBidirectionalModel([CLOUD_SIZE * 3, 40], [2*40*CLOUD_SIZE, 40],
+                                               1, 0.1, 0.2, pointcloud_size=CLOUD_SIZE)  
+
+    # Saver
+    saver = tf.train.Saver()
+    
+    if os.path.exists("embeddings"):
+        shutil.rmtree("embeddings")
+    os.mkdir("embeddings")
+    
+
+    config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
+    with tf.Session(config=config) as sess:
+
+        # Run the initialization
+        sess.run(tf.global_variables_initializer())
+         
+        # saver    
+        saver.restore(sess, tf.train.latest_checkpoint('models'))
+        
+        # Do the training loop
+        global_batch_idx = 1
+        summary_skip_batch = 1
+
+        # loop for all batches
+        index = 1
+        for clouds, labels in data_gen.generate_representative_batch(1):
+        
+            # count embeddings
+            embedding_input = np.stack([clouds], axis=1)
+            embeddings = sess.run(model_features.get_embeddings(), feed_dict={model_features.placeholder_embdg: embedding_input})
+            
+            data_filapath = "embeddings/data_%04d.npy" % index
+            label_filapath = "embeddings/label_%04d.npy" % index
+            np.save(data_filapath, embeddings)
+            np.save(label_filapath, labels)
+            index = index+1
 
 def main(argv):
 
@@ -121,15 +232,17 @@ def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", help="Name of the run", type=str, required=True)
     parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=80)
-    parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=100)
+    parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=25)
     parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")
     parser.add_argument("-m", "--margin", help="Triple loss margin value", type=float, required=False, default=0.2)
     args = vars(parser.parse_args())
 
     # train
-    train_synthetic(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                    learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+#     train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+#                                         learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+#     train_synthetic_classification(args["name"], batch_size=args["batch_size"], epochs=args["epochs"], learning_rate=args["learning_rate"], device=args["device"])
+    save_embeddings(device=args["device"])
 
     # Print all settings at the end of learning
     print "MLP-basic model:"

@@ -1,6 +1,8 @@
+import os
+import time
 import numpy as np
 import tensorflow as tf
-from debian.debtags import output
+import siamese_pointnet.defines as df
 
 class GenericModel(object):
     """
@@ -236,7 +238,8 @@ class RNNBidirectionalModel(GenericModel):
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self, rnn_layers_sizes, mlp_layers_sizes, batch_size, learning_rate, margin, pointcloud_size=16):
+    def __init__(self, rnn_layers_sizes, mlp_layers_sizes,
+                 batch_size, learning_rate, margin, pointcloud_size=16):
         """
         Build a model.
         Args:
@@ -248,8 +251,6 @@ class RNNBidirectionalModel(GenericModel):
             margin (float): Learning margin.
             pointcloud_size (int): Number of 3D points in the pointcloud.
         """
-        
-        # assert
         if mlp_layers_sizes[0] != 2*rnn_layers_sizes[-1]*pointcloud_size:
             raise ValueError("first val of mlp_layers_sizes must match 2*rnn_last_value*pointcloud_size")
         
@@ -260,6 +261,7 @@ class RNNBidirectionalModel(GenericModel):
         self.pointcloud_size = pointcloud_size
         self.learning_rate = learning_rate
         self.margin = margin
+        self.summaries = []
         
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
@@ -279,10 +281,14 @@ class RNNBidirectionalModel(GenericModel):
             self.train_embd = self._calculate_embeddings(self.placeholder_train)
             self.loss = self._calculate_loss(self.train_embd)
             self.optimizer = self._define_optimizer(self.loss)
-            tf.summary.scalar('loss', self.loss)
+            self.summaries.append(tf.summary.scalar('loss', self.loss))
+
+        with tf.name_scope("classify"):
+            self.classification_embd = self._calculate_embeddings(self.placeholder_embdg)
+            self.classification_pred = self._define_classifier(self.classification_embd)
         
         # merge summaries and write        
-        self.summary = tf.summary.merge_all()
+        self.summary = tf.summary.merge(self.summaries)
 
     def get_embeddings(self):
         """
@@ -290,37 +296,65 @@ class RNNBidirectionalModel(GenericModel):
         """
         return self.embeddings
 
+    def get_classification_prediction(self):
+        """
+        Get classification prediction to be run with a batch of a sifnle pointclouds.
+        """
+        return self.classification_pred
+
+    def save_model(self, session):
+        """
+        Save the model in the model dir.
+
+        Args:
+            session (tf.Session): Session which one want to save model.
+        """
+        saver = tf.train.Saver()
+        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join(df.MODELS_DIR, name))
+
+    def load_model(self, session):
+        """
+        Save the model in the model dir.
+
+        Args:
+            session (tf.Session): Session which one want to save model.
+        """
+        saver = tf.train.Saver()
+        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join(df.MODELS_DIR, name))        
+
     def _init_params(self):
         """
         Initialize params for RNN and MLP networks used later.
         """
         
         # Define RNN params
-        self.cells = { 'fw' : [], 'bw' : []}
-        self.states = { 'fw' : [], 'bw' : []}
+        self.rnn_cells = { 'fw' : [], 'bw' : []}
+        self.rnn_states = { 'fw' : [], 'bw' : []}
         for layers in self.rnn_layers_sizes:
 
             # Layer
             cell_fw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
             cell_bw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
             
-            self.cells['fw'].append(cell_fw)
-            self.cells['bw'].append(cell_bw)
+            self.rnn_cells['fw'].append(cell_fw)
+            self.rnn_cells['bw'].append(cell_bw)
             
             # State
             state_fw = cell_fw.zero_state(self.batch_size, tf.float32)
             state_bw = cell_bw.zero_state(self.batch_size, tf.float32)
             
-            self.states['fw'].append(state_fw)
-            self.states['bw'].append(state_bw)
+            self.rnn_states['fw'].append(state_fw)
+            self.rnn_states['bw'].append(state_bw)
         
         # Define MLP params
-        self.params = {}
+        self.mlp_params = {}
         for layer_idx in range(1, len(self.mlp_layers_sizes)):
-            self.params['W' + str(layer_idx)] = tf.get_variable('W' + str(layer_idx), 
+            self.mlp_params['W' + str(layer_idx)] = tf.get_variable('W' + str(layer_idx), 
                                                                 [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
                                                                 initializer = tf.contrib.layers.xavier_initializer(), )
-            self.params["b" + str(layer_idx)] = tf.get_variable("b" + str(layer_idx),
+            self.mlp_params["b" + str(layer_idx)] = tf.get_variable("b" + str(layer_idx),
                                                                 [self.mlp_layers_sizes[layer_idx]],
                                                                 initializer = tf.zeros_initializer())
 
@@ -369,27 +403,26 @@ class RNNBidirectionalModel(GenericModel):
             ret = None
             
             if len(inputs) == 1:
-                out, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
-                                                                           initial_states_fw=self.states['fw'],
-                                                                           initial_states_bw=self.states['bw'],
+                out, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.rnn_cells['fw'], self.rnn_cells['bw'],
+                                                                           initial_states_fw=self.rnn_states['fw'],
+                                                                           initial_states_bw=self.rnn_states['bw'],
                                                                            inputs=inputs[0], dtype=tf.float32,
                                                                            scope="rnn")
                 ret = tf.stack([out], axis=1)
             elif len(inputs) == 3:
-                anr, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
-                                                                           initial_states_fw=self.states['fw'],
-                                                                           initial_states_bw=self.states['bw'],
+                anr, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.rnn_cells['fw'], self.rnn_cells['bw'],
+                                                                           initial_states_fw=self.rnn_states['fw'],
+                                                                           initial_states_bw=self.rnn_states['bw'],
                                                                            inputs=inputs[0], dtype=tf.float32,
                                                                            scope="anchor")
-                tf.summary.histogram("anchor_embedding", anr)
-                pos, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
-                                                                           initial_states_fw=self.states['fw'],
-                                                                           initial_states_bw=self.states['bw'],
+                pos, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.rnn_cells['fw'], self.rnn_cells['bw'],
+                                                                           initial_states_fw=self.rnn_states['fw'],
+                                                                           initial_states_bw=self.rnn_states['bw'],
                                                                            inputs=inputs[1], dtype=tf.float32,
                                                                            scope="positive")
-                neg, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.cells['fw'], self.cells['bw'],
-                                                                           initial_states_fw=self.states['fw'],
-                                                                           initial_states_bw=self.states['bw'],
+                neg, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.rnn_cells['fw'], self.rnn_cells['bw'],
+                                                                           initial_states_fw=self.rnn_states['fw'],
+                                                                           initial_states_bw=self.rnn_states['bw'],
                                                                            inputs=inputs[2], dtype=tf.float32,
                                                                            scope="negative")
                 ret = tf.stack([anr, pos, neg], axis=1)
@@ -422,7 +455,7 @@ class RNNBidirectionalModel(GenericModel):
                 AX = tf.reshape(inputs[0], [self.batch_size, -1])
                 for layer_idx in range(1, len(self.mlp_layers_sizes)):
                     with tf.name_scope("layer_" + str(layer_idx)):
-                        AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                        AX = tf.nn.tanh(tf.matmul(AX, self.mlp_params['W' + str(layer_idx)]) + self.mlp_params['b' + str(layer_idx)])
                 ret = tf.stack([AX], axis=1)
             elif len(inputs) == 3:
                 outputs = []
@@ -430,20 +463,19 @@ class RNNBidirectionalModel(GenericModel):
                     AX = tf.reshape(inputs[0], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
-                    tf.summary.histogram("anchor_embedding", AX)
+                            AX = tf.nn.tanh(tf.matmul(AX, self.mlp_params['W' + str(layer_idx)]) + self.mlp_params['b' + str(layer_idx)])
                     outputs.append(AX)
                 with tf.name_scope("positive"):
                     AX = tf.reshape(inputs[1], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                            AX = tf.nn.tanh(tf.matmul(AX, self.mlp_params['W' + str(layer_idx)]) + self.mlp_params['b' + str(layer_idx)])
                     outputs.append(AX)
                 with tf.name_scope("negative"):
                     AX = tf.reshape(inputs[2], [self.batch_size, -1])
                     for layer_idx in range(1, len(self.mlp_layers_sizes)):
                         with tf.name_scope("layer_" + str(layer_idx)):
-                            AX = tf.nn.tanh(tf.matmul(AX, self.params['W' + str(layer_idx)]) + self.params['b' + str(layer_idx)])
+                            AX = tf.nn.tanh(tf.matmul(AX, self.mlp_params['W' + str(layer_idx)]) + self.mlp_params['b' + str(layer_idx)])
                     outputs.append(AX)
                 ret = tf.stack(outputs, axis=1)
             else:
@@ -472,3 +504,20 @@ class RNNBidirectionalModel(GenericModel):
         """
         with tf.name_scope("optimizer"):
             return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
+
+    def _define_classifier(self, embeddings):
+        """
+        Define classifier on embeddings vector.
+
+        Args:
+            embeddings (np.ndaray of shape [B, 1, E]): embedding of each cloud, where
+                B: batch_size, E: size of an embedding of a pointcloud.
+        Returns:
+            (int): Predicted class.
+        """
+        with tf.name_scope("softmax"):
+            embeddings_list = tf.unstack(embeddings, axis=1)
+            if len(embeddings_list) != 1:
+                raise ValueError("Cannot handle the input embeddings")
+            else:
+                return tf.nn.softmax(embeddings_list[0])
