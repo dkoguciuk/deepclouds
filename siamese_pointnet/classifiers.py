@@ -1,3 +1,4 @@
+import os
 import time
 import numpy as np
 import tensorflow as tf
@@ -35,7 +36,7 @@ class MLPClassifier(md.GenericModel):
         
             # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
             with tf.name_scope("placeholders"):
-                self.placeholder_dupa = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="dupa")
+                self.placeholder_embed = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="input_embedding")
                 self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[-1]], name="true_labels")
     
             # init MLP params
@@ -44,7 +45,7 @@ class MLPClassifier(md.GenericModel):
             
             # calculate loss & optimizer
             with tf.name_scope("train"):
-                self.classification_pred = self._define_classifier(self.placeholder_dupa)
+                self.classification_pred = self._define_classifier(self.placeholder_embed)
                 self.loss = self._calculate_loss(self.classification_pred, self.placeholder_label)
                 self.optimizer = self._define_optimizer(self.loss)
                 self.summaries.append(tf.summary.scalar('loss', self.loss))
@@ -56,7 +57,18 @@ class MLPClassifier(md.GenericModel):
         """
         Get classification prediction to be run with a batch of a sifnle pointclouds.
         """
-        return self.classification_pred
+        return tf.nn.softmax(self.classification_pred)
+
+    def save_model(self, session):
+        """
+        Save the model in the model dir.
+
+        Args:
+            session (tf.Session): Session which one want to save model.
+        """
+        saver = tf.train.Saver()
+        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join("models_classifier", name))      
 
     def _init_params(self):
         """
@@ -65,12 +77,12 @@ class MLPClassifier(md.GenericModel):
         # Define MLP params
         self.mlp_params = {}
         for layer_idx in range(1, len(self.mlp_layers_sizes)):
-            self.mlp_params['DUPA_W' + str(layer_idx)] = tf.get_variable('DUPA_W' + str(layer_idx), 
-                                                                [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
-                                                                initializer = tf.contrib.layers.xavier_initializer(), )
-            self.mlp_params["DUPA_b" + str(layer_idx)] = tf.get_variable("DUPA_b" + str(layer_idx),
-                                                                [self.mlp_layers_sizes[layer_idx]],
-                                                                initializer = tf.zeros_initializer())
+            self.mlp_params['class_W' + str(layer_idx)] = tf.get_variable('class_W' + str(layer_idx), 
+                                                                          [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
+                                                                          initializer = tf.contrib.layers.xavier_initializer(), )
+            self.mlp_params["class_b" + str(layer_idx)] = tf.get_variable("class_b" + str(layer_idx),
+                                                                          [self.mlp_layers_sizes[layer_idx]],
+                                                                          initializer = tf.zeros_initializer())
 
     def _define_classifier(self, embeddings):
         """
@@ -86,11 +98,10 @@ class MLPClassifier(md.GenericModel):
             AX = embeddings
             for layer_idx in range(1, len(self.mlp_layers_sizes)-1):
                 with tf.name_scope("layer_" + str(layer_idx)):
-                    AX = tf.nn.relu(tf.matmul(AX, self.mlp_params['DUPA_W' + str(layer_idx)]) + self.mlp_params['DUPA_b' + str(layer_idx)])            
+                    AX = tf.nn.relu(tf.matmul(AX, self.mlp_params['class_W' + str(layer_idx)]) + self.mlp_params['class_b' + str(layer_idx)])            
 
             with tf.name_scope("layer_" + str(len(self.mlp_layers_sizes)-1)):
-                return tf.nn.softmax(tf.matmul(AX, self.mlp_params['DUPA_W' + str(len(self.mlp_layers_sizes)-1)]) +
-                                     self.mlp_params['DUPA_b' + str(len(self.mlp_layers_sizes)-1)])
+                return tf.matmul(AX, self.mlp_params['class_W' + str(len(self.mlp_layers_sizes)-1)]) + self.mlp_params['class_b' + str(len(self.mlp_layers_sizes)-1)]
 
     def _calculate_loss(self, predictions, true_labels):
         """

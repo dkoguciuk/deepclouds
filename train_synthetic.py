@@ -32,13 +32,45 @@ def find_hard_triples_to_train(embeddings, labels):
         
         # find hard negative
         other_indices = np.squeeze(np.argwhere(labels != class_idx))
-        hard_negatives_indices.append(other_indices[np.argmin(np.take(distances, other_indices))])
+        negatives_distances = np.take(distances, other_indices)
+        negatives_distances[negatives_distances <= np.max(np.take(distances, class_indices))] = float('inf')        
+        hard_negatives_indices.append(other_indices[np.argmin(negatives_distances)])
 
     return hard_positives_indices, hard_negatives_indices
 
+def find_nearest_idx(array, value):
+    idx = (np.abs(array-value)).argmin()
+    return idx
+
+def find_semi_hard_triples_to_train(embeddings, labels):
+    hard_positives_indices = []
+    hard_negatives_indices = []
+    MARGIN = 0.2
+    for cloud_idx in range(embeddings.shape[0]):
+        # calc distances
+        distances = np.linalg.norm(embeddings-embeddings[cloud_idx], axis=1)
+        
+        # find hard positive
+        class_idx = labels[cloud_idx]
+        class_indices = np.squeeze(np.argwhere(labels == class_idx))
+        hard_positives_indices.append(class_indices[np.argmax(np.take(distances, class_indices))])
+        positive_distance = distances[hard_positives_indices[-1]]
+        
+        # Help vars
+        other_indices = np.squeeze(np.argwhere(labels != class_idx))                                            # Find indices of all other class instances
+        negatives_distances = np.take(distances, other_indices)                                                 # Find distances to all other class distances
+        #negatives_distances[negatives_distances <= positive_distance] = float('inf')                           # Ifinity distance when it's smaller than positive dist
+        #negative_idx = find_nearest_idx(negatives_distances, positive_distance + MARGIN/10)                    # Find index of elem in the half of margin range
+        
+        negatives_distances[negatives_distances <= (positive_distance + 1e-6)] = float('inf')                   # Ifinity distance when it's smaller than positive dist plus eps
+        negative_idx = np.argmin(negatives_distances)                                                           # Smallest
+        
+        hard_negatives_indices.append(other_indices[negative_idx])                                              # Find negative embedding index 
+    
+    return hard_positives_indices, hard_negatives_indices 
+
 def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, margin, device,
-                                        layers_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE, 1],
-                                        initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
+                                        rnn_layer_sizes=[CLOUD_SIZE * 3, 40], mlp_layer_sizes=[2*40*CLOUD_SIZE, 40]):
     """
     Train siamese pointnet with synthetic data.
     """
@@ -51,8 +83,9 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
 
     # Define model
     with tf.device(device):
-        model = RNNBidirectionalModel([CLOUD_SIZE * 3, 40], [2*40*CLOUD_SIZE, 40],
-                                      batch_size, learning_rate, margin, pointcloud_size=CLOUD_SIZE)
+        model = RNNBidirectionalModel(rnn_layer_sizes, mlp_layer_sizes,
+                                      batch_size, learning_rate, margin, normalize_embedding=True,
+                                      pointcloud_size=CLOUD_SIZE)
 
     # Session
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
@@ -63,11 +96,11 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
-        writer.add_graph(sess.graph)        
+#         writer.add_graph(sess.graph)        
  
         # Do the training loop
         global_batch_idx = 1
-        summary_skip_batch = 1
+        #summary_skip_batch = 1
         for epoch in range(epochs):
  
             # loop for all batches
@@ -79,7 +112,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                 embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input})
                 
                 # Find hard examples to train on
-                pos_indices, neg_indices = find_hard_triples_to_train(embeddings, labels)
+                pos_indices, neg_indices = find_semi_hard_triples_to_train(embeddings, labels)
                 
                 # Create triples to train
                 pos_clouds = np.copy(clouds)
@@ -93,8 +126,8 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                                    feed_dict={model.placeholder_train: training_input})
                 
                 # Tensorboard vis
-                if global_batch_idx % summary_skip_batch == 0:
-                    writer.add_summary(summary, global_batch_idx)
+                #if global_batch_idx % summary_skip_batch == 0:
+                writer.add_summary(summary, global_batch_idx)
                 global_batch_idx += 1
 
                 # Info
@@ -104,8 +137,6 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
         # Save model
         save_path = model.save_model(sess)
         print "Model saved in file: %s" % save_path
-        
-        print "W1 : %s" % model.mlp_params["W1"].eval()
 
 def train_synthetic_classification(name, batch_size, epochs, learning_rate, device):
     """
@@ -137,7 +168,7 @@ def train_synthetic_classification(name, batch_size, epochs, learning_rate, devi
         sess.run(tf.global_variables_initializer())
          
         # saver    
-        saver.restore(sess, tf.train.latest_checkpoint('models'))
+        saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
         
         # Logs
         log_model_dir = os.path.join(df.LOGS_DIR, model_classifier.get_model_name())
@@ -151,17 +182,17 @@ def train_synthetic_classification(name, batch_size, epochs, learning_rate, devi
 
             # loop for all batches
             index = 1
-            for clouds, labels in data_gen.generate_representative_batch(batch_size):
+            for clouds, labels in data_gen.generate_train_batch(batch_size):
             
                 # count embeddings
                 embedding_input = np.stack([clouds], axis=1)
                 embeddings = sess.run(model_features.get_embeddings(), feed_dict={model_features.placeholder_embdg: embedding_input})
-                
+
                 # run optimizer
                 new_labels = sess.run(tf.one_hot(labels, 40))
                 _, loss, pred, summary = sess.run([model_classifier.get_optimizer(), model_classifier.get_loss_function(),
                                              model_classifier.get_classification_prediction(), model_classifier.get_summary()],
-                                   feed_dict={model_classifier.placeholder_dupa: embeddings,
+                                   feed_dict={model_classifier.placeholder_embed: embeddings,
                                               model_classifier.placeholder_label: new_labels})
  
                 
@@ -178,6 +209,10 @@ def train_synthetic_classification(name, batch_size, epochs, learning_rate, devi
                 # Info
                 print "Epoch: %06d batch: %03d loss: %06f" % (epoch + 1, index, loss)
                 index += 1
+
+        # Save model
+        save_path = model_classifier.save_model(sess)
+        print "Model saved in file: %s" % save_path
 
 def save_embeddings(device):
     # Reset
@@ -197,7 +232,6 @@ def save_embeddings(device):
     if os.path.exists("embeddings"):
         shutil.rmtree("embeddings")
     os.mkdir("embeddings")
-    
 
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
     with tf.Session(config=config) as sess:
@@ -239,10 +273,10 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-#     train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-#                                         learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
-#     train_synthetic_classification(args["name"], batch_size=args["batch_size"], epochs=args["epochs"], learning_rate=args["learning_rate"], device=args["device"])
-    save_embeddings(device=args["device"])
+    train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+                                        learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+#    train_synthetic_classification(args["name"], batch_size=args["batch_size"], epochs=args["epochs"], learning_rate=args["learning_rate"], device=args["device"])
+#    save_embeddings(device=args["device"])
 
     # Print all settings at the end of learning
     print "MLP-basic model:"

@@ -68,9 +68,9 @@ class GenericModel(object):
         """ 
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.sqrt(tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=1))
+                pos_dist = tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=1)
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.sqrt(tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=1))
+                neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=1)
             with tf.name_scope("copute_loss"):
                 basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
                 final_loss = tf.reduce_mean(basic_loss)
@@ -115,6 +115,7 @@ class MLPModel(GenericModel):
             normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
             pointcloud_size (int): Number of 3D points in the pointcloud.
         """
+        raise NotImplemented("For a long time this class was not tested!")
 
         # Placeholders for input clouds
         self.input_a = tf.placeholder(tf.float32, [batch_size, pointcloud_size * 3], name="input_a")
@@ -239,7 +240,7 @@ class RNNBidirectionalModel(GenericModel):
     """
 
     def __init__(self, rnn_layers_sizes, mlp_layers_sizes,
-                 batch_size, learning_rate, margin, pointcloud_size=16):
+                 batch_size, learning_rate, margin, normalize_embedding=True, pointcloud_size=16):
         """
         Build a model.
         Args:
@@ -249,6 +250,7 @@ class RNNBidirectionalModel(GenericModel):
             batch_size (int): Batch size of SGD.
             learning_rate (float): Learning rate of SGD.
             margin (float): Learning margin.
+            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
             pointcloud_size (int): Number of 3D points in the pointcloud.
         """
         if mlp_layers_sizes[0] != 2*rnn_layers_sizes[-1]*pointcloud_size:
@@ -261,6 +263,7 @@ class RNNBidirectionalModel(GenericModel):
         self.pointcloud_size = pointcloud_size
         self.learning_rate = learning_rate
         self.margin = margin
+        self.normalize_embedding = normalize_embedding
         self.summaries = []
         
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
@@ -282,10 +285,6 @@ class RNNBidirectionalModel(GenericModel):
             self.loss = self._calculate_loss(self.train_embd)
             self.optimizer = self._define_optimizer(self.loss)
             self.summaries.append(tf.summary.scalar('loss', self.loss))
-
-        with tf.name_scope("classify"):
-            self.classification_embd = self._calculate_embeddings(self.placeholder_embdg)
-            self.classification_pred = self._define_classifier(self.classification_embd)
         
         # merge summaries and write        
         self.summary = tf.summary.merge(self.summaries)
@@ -296,12 +295,6 @@ class RNNBidirectionalModel(GenericModel):
         """
         return self.embeddings
 
-    def get_classification_prediction(self):
-        """
-        Get classification prediction to be run with a batch of a sifnle pointclouds.
-        """
-        return self.classification_pred
-
     def save_model(self, session):
         """
         Save the model in the model dir.
@@ -311,18 +304,7 @@ class RNNBidirectionalModel(GenericModel):
         """
         saver = tf.train.Saver()
         name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
-        return saver.save(session, os.path.join(df.MODELS_DIR, name))
-
-    def load_model(self, session):
-        """
-        Save the model in the model dir.
-
-        Args:
-            session (tf.Session): Session which one want to save model.
-        """
-        saver = tf.train.Saver()
-        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
-        return saver.save(session, os.path.join(df.MODELS_DIR, name))        
+        return saver.save(session, os.path.join("models_feature_extractor", name))      
 
     def _init_params(self):
         """
@@ -335,8 +317,8 @@ class RNNBidirectionalModel(GenericModel):
         for layers in self.rnn_layers_sizes:
 
             # Layer
-            cell_fw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
-            cell_bw = tf.nn.rnn_cell.BasicLSTMCell(layers, forget_bias=1.0)
+            cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers, forget_bias=1.0)
+            cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers, forget_bias=1.0)
             
             self.rnn_cells['fw'].append(cell_fw)
             self.rnn_cells['bw'].append(cell_bw)
@@ -377,10 +359,20 @@ class RNNBidirectionalModel(GenericModel):
             # rnn forward prop
             rnn_output = self._forward_rnn(input)
             
+#             # bare rnn output
+#             inputs = tf.unstack(rnn_output, axis=1)
+#             for input_idx in range(len(inputs)):
+#                 inputs[input_idx] = tf.reshape(inputs[input_idx], [self.batch_size, -1])
+#             ret = tf.stack(inputs, axis=1)
+#             return ret
+            
             # mlp forward prop
             mlp_output = self._forward_mlp(rnn_output)
             
-            # mlp forward prop
+            # normalize embedding
+            if self.normalize_embedding:
+                return tf.nn.l2_normalize(mlp_output, dim=2, epsilon=1e-10, name='embeddings')
+
             return mlp_output
 
     def _forward_rnn(self, input):
@@ -504,20 +496,3 @@ class RNNBidirectionalModel(GenericModel):
         """
         with tf.name_scope("optimizer"):
             return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
-
-    def _define_classifier(self, embeddings):
-        """
-        Define classifier on embeddings vector.
-
-        Args:
-            embeddings (np.ndaray of shape [B, 1, E]): embedding of each cloud, where
-                B: batch_size, E: size of an embedding of a pointcloud.
-        Returns:
-            (int): Predicted class.
-        """
-        with tf.name_scope("softmax"):
-            embeddings_list = tf.unstack(embeddings, axis=1)
-            if len(embeddings_list) != 1:
-                raise ValueError("Cannot handle the input embeddings")
-            else:
-                return tf.nn.softmax(embeddings_list[0])
