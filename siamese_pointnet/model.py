@@ -75,6 +75,32 @@ class GenericModel(object):
                 basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
                 final_loss = tf.reduce_mean(basic_loss)
             return final_loss
+        
+    def _tripplet_cosine_loss(self, embedding_a, embedding_p, embedding_n, margin):
+        """
+        Define tripplet loss tensor.
+
+        Args:
+            embedding_a (tensor of shape [B, E]): Embedding tensor of the anchor cloud of size
+            B: batch_size, E: embedding vector size.
+            embedding_p (tensor of shape [B, E]): Embedding tensor of the positive cloud of size
+            B: batch_size, E: embedding vector size.
+            embedding_n (tensor of shape [B, E]): Embedding tensor of the negative cloud of size
+            B: batch_size, E: embedding vector size.
+            margin (float): Loss margin.
+
+        Returns:
+            (tensor): Loss function.
+        """ 
+        with tf.name_scope("triplet_loss"):
+            with tf.name_scope("dist_pos"):
+                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, axis=1)
+            with tf.name_scope("dist_neg"):
+                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, axis=1)
+            with tf.name_scope("copute_loss"):
+                basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
+                final_loss = tf.reduce_mean(basic_loss)
+            return final_loss
 
     def _normalize_embedding(self, embedding):
         """
@@ -85,7 +111,7 @@ class GenericModel(object):
         Returns:
             (tensor): Normalized embedding tensor of a pointcloud.
         """
-        return tf.nn.l2_normalize(embedding, dim=1, epsilon=1e-10, name='embeddings')
+        return tf.nn.l2_normalize(embedding, axis=1, epsilon=1e-10, name='embeddings')
 
 class MLPModel(GenericModel):
     """
@@ -371,7 +397,7 @@ class RNNBidirectionalModel(GenericModel):
             
             # normalize embedding
             if self.normalize_embedding:
-                return tf.nn.l2_normalize(mlp_output, dim=2, epsilon=1e-10, name='embeddings')
+                return tf.nn.l2_normalize(mlp_output, axis=2, epsilon=1e-10, name='embeddings')
 
             return mlp_output
 
@@ -488,7 +514,8 @@ class RNNBidirectionalModel(GenericModel):
         """
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
-            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+            return self._tripplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
+            #return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
 
     def _define_optimizer(self, loss_function):
         """

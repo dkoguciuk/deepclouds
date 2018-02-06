@@ -41,8 +41,8 @@ def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
 #        negatives_distances[negatives_distances <= positive_distance] = float('inf')                           # Ifinity distance when it's smaller than positive dist
 #        negative_idx = find_nearest_idx(negatives_distances, positive_distance + margin/10)                    # Find index of elem in the half of margin range
         
-        negatives_distances[negatives_distances <= (positive_distance + 1e-6)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
-#        negatives_distances[negatives_distances <= (positive_distance)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
+#        negatives_distances[negatives_distances <= (positive_distance + 1e-6)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
+        negatives_distances[negatives_distances <= positive_distance] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
         negative_idx = np.argmin(negatives_distances)                                                           # Smallest
         
         hard_negatives_indices.append(other_indices[negative_idx])                                              # Find negative embedding index 
