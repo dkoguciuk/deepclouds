@@ -54,23 +54,6 @@ class GenericData(object):
         return data[idx, ...]
 
     @staticmethod
-    def _shuffle_points_in_pointclouds(data):
-        """
-        Shuffle points in the pointclouds and return its random permutation.
-
-        Args:
-            data (numpy.ndarray of size [B, N, 3]): point clouds data to be shuffled along second axis
-        Returns:
-            (numpy.ndarray of size [B, N,3]): shuffled point cloud
-        """
-        rets = []
-        for cloud_idx, cloud in enumerate(data): 
-            idx = np.arange(data.shape[1])
-            np.random.shuffle(idx)
-            rets.append(data[cloud_idx, idx, :])
-        return np.stack(rets)
-
-    @staticmethod
     def _shuffle_data_with_labels(data, labels):
         """
         Shuffle pointclouds data and labels.
@@ -101,6 +84,25 @@ class GenericData(object):
             j = random.randint(0, data.shape[0] - 1)
             if labels[j][0] != labels[index][0]:
                 return j
+
+    @staticmethod
+    def _shuffle_points_in_pointclouds(pointclouds):
+        """
+        Shuffle points in the pointclouds and return its random permutation.
+
+        Args:
+            pointclouds (np.ndarray of size [B, X, N, 3]): Point clouds stacked in single batch
+                would be shuffled along third axis.
+        Returns:
+            (numpy.ndarray of size [B, X, N,3]): shuffled point clouds.
+        """
+        shape = pointclouds.shape
+        pointclouds = np.reshape(pointclouds, [-1, shape[2], shape[3]])
+        for cloud_idx in range(shape[0]*shape[1]):
+            idx = np.arange(pointclouds[cloud_idx].shape[0])
+            np.random.shuffle(idx)
+            pointclouds[cloud_idx] = pointclouds[cloud_idx][idx, :]
+        return np.reshape(pointclouds, shape)
 
     @staticmethod
     def _jitter_pointclouds(pointclouds, sigma=0.01, clip=0.05):
@@ -555,7 +557,7 @@ class SyntheticData(GenericData):
             yield batch_data
 
     def generate_representative_batch(self, train, batch_size=80,
-                                      jitter_pointclouds=False, rotate_pointclouds=False,
+                                      shuffle_pointclouds=False, jitter_pointclouds=False, rotate_pointclouds=False,
                                       reshape_flags=[]):
         """
         Take batch_size pointclouds with at least 2 instances of each class.
@@ -564,6 +566,7 @@ class SyntheticData(GenericData):
             train (bool): Should we take pointclouds from train or test dataset?
             batch_size (int): Size of a batch, please consider we assume every object should appear
                 at least two times in the batch, so recommended batch size is 80 with 2 identities per batch.
+            shuffle_pointclouds (boolean): Should we shuffle points in the pointclouds?
             jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
@@ -606,6 +609,9 @@ class SyntheticData(GenericData):
             batch_clouds = np.stack(batch_clouds, axis=0)
             batch_clouds = np.stack([batch_clouds], axis=1)
             batch_labels = np.stack(batch_labels, axis=0)
+
+            if shuffle_pointclouds:
+                batch_clouds = SyntheticData._shuffle_points_in_pointclouds(batch_clouds)
 
             # jitter
             if jitter_pointclouds:

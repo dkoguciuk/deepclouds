@@ -38,10 +38,11 @@ def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
         # Help vars
         other_indices = np.squeeze(np.argwhere(labels != class_idx))                                            # Find indices of all other class instances
         negatives_distances = np.take(distances, other_indices)                                                 # Find distances to all other class distances
-        #negatives_distances[negatives_distances <= positive_distance] = float('inf')                           # Ifinity distance when it's smaller than positive dist
-        #negative_idx = find_nearest_idx(negatives_distances, positive_distance + MARGIN/10)                    # Find index of elem in the half of margin range
+#        negatives_distances[negatives_distances <= positive_distance] = float('inf')                           # Ifinity distance when it's smaller than positive dist
+#        negative_idx = find_nearest_idx(negatives_distances, positive_distance + margin/10)                    # Find index of elem in the half of margin range
         
-        negatives_distances[negatives_distances <= positive_distance] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
+        negatives_distances[negatives_distances <= (positive_distance + 1e-6)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
+#        negatives_distances[negatives_distances <= (positive_distance)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
         negative_idx = np.argmin(negatives_distances)                                                           # Smallest
         
         hard_negatives_indices.append(other_indices[negative_idx])                                              # Find negative embedding index 
@@ -49,7 +50,8 @@ def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
     return hard_positives_indices, hard_negatives_indices 
 
 def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, margin, device,
-                                        rnn_layer_sizes=[CLOUD_SIZE * 3, 40], mlp_layer_sizes=[2*40*CLOUD_SIZE, 40]):
+                                        rnn_layer_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE * 3, CLOUD_SIZE * 3],
+                                        mlp_layer_sizes=[CLOUD_SIZE * 3 * 2 * CLOUD_SIZE, 128]):
     """
     Train siamese pointnet with synthetic data.
     """
@@ -84,7 +86,8 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
  
             # loop for all batches
             index = 1
-            for clouds, labels in data_gen.generate_representative_batch(batch_size):
+            for clouds, labels in data_gen.generate_representative_batch(batch_size, shuffle_pointclouds=True,
+                                                                         rotate_pointclouds=True, jitter_pointclouds=True):
 
                 ##################################################################################################
                 ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
