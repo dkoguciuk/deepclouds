@@ -478,17 +478,18 @@ class SyntheticData(GenericData):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
-            clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
+            #clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
                 global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
                 cloud_path = os.path.join(self.train_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
                 np.save(cloud_path, clouds_new[cloud_idx][0])
 
+        # Augment dataset and save (test)
         for instance_idx in range(0, instances_per_class_test):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
-            clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
+            #clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
                 global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
                 cloud_path = os.path.join(self.test_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
@@ -570,8 +571,12 @@ class SyntheticData(GenericData):
             # yield
             yield batch_data
 
-    def generate_representative_batch(self, train, batch_size=80,
-                                      shuffle_pointclouds=False, jitter_pointclouds=False, rotate_pointclouds=False,
+    def generate_representative_batch(self,
+                                      train,
+                                      batch_size=80,
+                                      shuffle_points=False,
+                                      jitter_points=False,
+                                      rotate_pointclouds=False,
                                       reshape_flags=[]):
         """
         Take batch_size pointclouds with at least 2 instances of each class.
@@ -580,8 +585,8 @@ class SyntheticData(GenericData):
             train (bool): Should we take pointclouds from train or test dataset?
             batch_size (int): Size of a batch, please consider we assume every object should appear
                 at least two times in the batch, so recommended batch size is 80 with 2 identities per batch.
-            shuffle_pointclouds (boolean): Should we shuffle points in the pointclouds?
-            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
+            shuffle_points (boolean): Should we shuffle points in the pointclouds?
+            jitter_points (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
             reshape_flags (list of str): Output pointclouds are in the default shape of
@@ -601,7 +606,7 @@ class SyntheticData(GenericData):
         pointclouds_filepaths = [os.path.join(pointclouds_dir, filename) for filename
                                  in os.listdir(pointclouds_dir) if filename.endswith(".npy")]
 
-        # sort 
+        # sort
         pointclouds_indices = []
         for filepath in pointclouds_filepaths:
             start_idx = filepath.rfind("/") + 1
@@ -624,11 +629,11 @@ class SyntheticData(GenericData):
             batch_clouds = np.stack([batch_clouds], axis=1)
             batch_labels = np.stack(batch_labels, axis=0)
 
-            if shuffle_pointclouds:
+            # shuffle points
+            if shuffle_points:
                 batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
-
             # jitter
-            if jitter_pointclouds:
+            if jitter_points:
                 batch_clouds = SyntheticData._jitter_batch(batch_clouds)
             # rotate
             if rotate_pointclouds:
@@ -641,9 +646,9 @@ class SyntheticData(GenericData):
             # yield
             yield np.squeeze(batch_clouds, axis=1), batch_labels
 
-    def generate_random_batch(self, train, batch_size=64, shuffle_files=False, 
-                              jitter_pointclouds=False, rotate_pointclouds=False,
-                              reshape_flags=[]):
+    def generate_random_batch(self, train, batch_size=64, shuffle_files=False,
+                              shuffle_points=False, jitter_points=False,
+                              rotate_pointclouds=False, reshape_flags=[]):
         """ 
         Take random pointcloud, apply optional operations on each pointclouds and return 
         batch of such pointclouds with labels.
@@ -653,6 +658,7 @@ class SyntheticData(GenericData):
             batch_size (int): Batch size we would split the dataset into (numer of triplets
                 to be returned by the generator).
             shuffle_files (boolean): Should we shuffle files with pointclouds?
+            shuffle_points (boolean): Should we shuffle points in the pointclouds?
             jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
@@ -696,8 +702,11 @@ class SyntheticData(GenericData):
             batch_clouds = np.stack([batch_clouds], axis=1)
             batch_labels = np.stack(batch_labels, axis=0)
 
+            # shuffle points
+            if shuffle_points:
+                batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
             # jitter
-            if jitter_pointclouds:
+            if jitter_points:
                 batch_clouds = SyntheticData._jitter_batch(batch_clouds)
             # rotate
             if rotate_pointclouds:

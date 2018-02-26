@@ -14,7 +14,7 @@ import tensorflow as tf
 import siamese_pointnet.defines as df
 import siamese_pointnet.modelnet_data as modelnet
 from siamese_pointnet.classifiers import MLPClassifier
-from siamese_pointnet.model import RNNBidirectionalModel, MLPModel
+from siamese_pointnet.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
 
 CLOUD_SIZE = 32
 
@@ -64,9 +64,14 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
 
     # Define model
     with tf.device(device):
-        model = RNNBidirectionalModel(rnn_layer_sizes, mlp_layer_sizes,
-                                      batch_size, learning_rate, margin, normalize_embedding=True,
-                                      pointcloud_size=CLOUD_SIZE)
+#         model = RNNBidirectionalModel(rnn_layer_sizes, mlp_layer_sizes,
+#                                       batch_size, learning_rate, margin, normalize_embedding=True,
+#                                       pointcloud_size=CLOUD_SIZE)
+        model = OrderMattersModel(batch_size = batch_size, pointcloud_size = CLOUD_SIZE, margin=margin,
+                                  read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
+                                  process_block_steps=32, learning_rate=learning_rate)
+        # pierwsze testy z 32 krokami process_block_steps
+        # oraz z log2 3*cloud_size (96) 
 
     # Session
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
@@ -77,7 +82,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
-#         writer.add_graph(sess.graph)        
+#         writer.add_graph(sess.graph)
  
         # Do the training loop
         global_batch_idx = 1
@@ -86,71 +91,75 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
  
             # loop for all batches
             index = 1
-            for clouds, labels in data_gen.generate_representative_batch(batch_size, shuffle_pointclouds=True,
-                                                                         rotate_pointclouds=True, jitter_pointclouds=True):
+            for clouds, labels in data_gen.generate_representative_batch(train=True,
+                                                                         batch_size=batch_size,
+                                                                         shuffle_points=False,
+                                                                         jitter_points=True,
+                                                                         rotate_pointclouds=True):
 
                 ##################################################################################################
                 ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
                 ##################################################################################################
+                
                 # count embeddings
                 embedding_input = np.stack([clouds], axis=1)
                 embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input})
                 
                 # Find hard examples to train on
                 pos_indices, neg_indices = find_semi_hard_triples_to_train_1(embeddings, labels, margin)
-                
+                 
                 # Create triples to train
                 pos_clouds = np.copy(clouds)
                 pos_clouds = pos_clouds[pos_indices, ...]
                 neg_clouds = np.copy(clouds)
                 neg_clouds = neg_clouds[neg_indices, ...]
                 training_input = np.stack([clouds, pos_clouds, neg_clouds], axis =1)
-                
+                 
                 ##################################################################################################
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
-                
+                 
                 # run optimizer
                 _, loss, summary_train = sess.run([model.get_optimizer(), model.get_loss_function(), model.get_summary()],
                                                   feed_dict={model.placeholder_train: training_input})
-                
+                 
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
                 ##################################################################################################
-                
+                 
                 # Get test embeddings
                 test_embeddings = { k : [] for k in range(40)}
                 for clouds, labels in data_gen.generate_random_batch(False, 80):# 400 test examples / 80 clouds = 5 batches
-
+ 
                     # count embeddings
                     test_embedding_input = np.stack([clouds], axis=1)
                     test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input})
-
+ 
                     # add embeddings
                     for cloud_idx in range(labels.shape[0]):
                         test_embeddings[labels[cloud_idx]].append(test_embedding[cloud_idx].tolist())
-                
+                 
                 # Convert to numpy
                 class_embeddings = []
                 for k in range(40):
                     class_embeddings.append(test_embeddings[k])
                 class_embeddings = np.stack(class_embeddings, axis=0)
-
+ 
                 # calc distances                
                 pos = np.sqrt(np.sum((class_embeddings[:,:-1,:] - class_embeddings[:,1:,:]) **2, axis=2))
                 neg = np.sqrt(np.sum((class_embeddings[:-1,:,:] - class_embeddings[1:,:,:]) **2, axis=2))
-                
+                 
                 ##################################################################################################
                 ############################################# SUMMARIES ##########################################
                 ##################################################################################################
-                
+                 
                 # Add summary
                 summary_test = tf.Summary()
                 summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=np.mean(neg)-np.mean(pos))
                 writer.add_summary(summary_test, global_batch_idx)
                 writer.add_summary(summary_train, global_batch_idx)
                 global_batch_idx += 1
-
+ 
                 # Info
                 print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f" % (epoch + 1, index, loss, np.mean(neg)-np.mean(pos))
                 index += 1
@@ -176,7 +185,7 @@ def main(argv):
                                         learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
 
     # Print all settings at the end of learning
-    print "MLP-basic model:"
+    print "Training params:"
     print "name          = ", args["name"]
     print "batch_size    = ", args["batch_size"]
     print "epochs        = ", args["epochs"]

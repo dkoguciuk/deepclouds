@@ -1,8 +1,10 @@
 import os
+import sys
 import time
 import numpy as np
 import tensorflow as tf
 import siamese_pointnet.defines as df
+from siamese_pointnet.my_lstm_cell import MyLSTMCell
 
 class GenericModel(object):
     """
@@ -91,12 +93,12 @@ class GenericModel(object):
 
         Returns:
             (tensor): Loss function.
-        """ 
+        """
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, axis=1)
+                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, dim=1)
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, axis=1)
+                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, dim=1)
             with tf.name_scope("copute_loss"):
                 basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
                 final_loss = tf.reduce_mean(basic_loss)
@@ -111,7 +113,7 @@ class GenericModel(object):
         Returns:
             (tensor): Normalized embedding tensor of a pointcloud.
         """
-        return tf.nn.l2_normalize(embedding, axis=1, epsilon=1e-10, name='embeddings')
+        return tf.nn.l2_normalize(embedding, dim=1, epsilon=1e-10, name='embeddings')
 
 class MLPModel(GenericModel):
     """
@@ -397,7 +399,7 @@ class RNNBidirectionalModel(GenericModel):
             
             # normalize embedding
             if self.normalize_embedding:
-                return tf.nn.l2_normalize(mlp_output, axis=2, epsilon=1e-10, name='embeddings')
+                return tf.nn.l2_normalize(mlp_output, dim=2, epsilon=1e-10, name='embeddings')
 
             return mlp_output
 
@@ -523,3 +525,347 @@ class RNNBidirectionalModel(GenericModel):
         """
         with tf.name_scope("optimizer"):
             return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
+
+class OrderMattersModel(GenericModel):
+    """
+    Feature extraction model similar to the one described in Order Matters paper.
+    """
+
+    MODEL_NAME = "OrderMattersModel"
+    """
+    Name of the model, which will be used as a directory for tensorboard logs. 
+    """
+
+    CLASSES_COUNT = 40
+    """
+    How many classes do we have in the modelnet dataset.
+    """
+
+    def __init__(self, batch_size, pointcloud_size,
+                 read_block_units, process_block_steps,
+                 normalize_embedding=True, margin=0.2, learning_rate=0.001, verbose=True):
+        """
+        Build a model.
+        Args:
+            batch_size (int): Batch size of SGD.
+            pointcloud_size (int): Number of 3D points in the pointcloud.
+            read_block_units (list of ints): List of hidden units -- each number
+                is a layer of the read block RNN.
+            process_block_steps (int): How many steps should perform process block?
+            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to <0,1>.
+            margin (float): Learning margin. 
+            learning_rate (float): Learning rate of SGD.
+            verbose (bool): Should we print additional info?
+        """
+
+        # Save params
+        self.batch_size = batch_size
+        self.pointcloud_size = pointcloud_size
+        self.read_block_units = read_block_units
+        self.process_block_steps = process_block_steps
+        self.margin = margin
+        self.normalize_embedding = normalize_embedding
+        self.learning_rate = learning_rate
+        self.verbose = verbose
+        self.summaries = []
+
+        # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
+        with tf.name_scope("placeholders"):
+            self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
+            self.placeholder_train = tf.placeholder(tf.float32, [self.batch_size, 3, self.pointcloud_size, 3], name="input_training")
+
+        # init params
+        with tf.name_scope("params"):
+            self._init_params()
+
+        # Get hard triplets
+        with tf.name_scope("get_embedding"):
+            self.memory_vector_embdg = self._define_read_block(self.placeholder_embdg)
+            with tf.name_scope("process_block"):
+                self.cloud_embedding_embdg = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
+                if self.normalize_embedding:
+                    self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=1, epsilon=1e-10)
+
+        # Train procedure
+        with tf.name_scope("train"):
+            self.memory_vector_train = self._define_read_block(self.placeholder_train)
+            with tf.name_scope("process_block"):
+                self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
+                # normalize embedding
+                if self.normalize_embedding:
+                    self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=2, epsilon=1e-10)
+            with tf.name_scope("optimizer"):
+                self.loss = self._calculate_loss(self.cloud_embedding_train)
+                self.optimizer = self._define_optimizer(self.loss)
+                self.summaries.append(tf.summary.scalar('loss', self.loss))
+
+        # merge summaries and write
+        self.summary = tf.summary.merge(self.summaries)
+
+    def _init_params(self):
+        """
+        Initialize params for both RNN networks used later.
+        """
+
+        if self.verbose:
+            sys.stdout.write("Initializing params...")
+            sys.stdout.flush()
+
+        # Define read block params
+        self.read_block_cells = { 'fw' : [], 'bw' : []}
+        self.read_block_states = { 'fw' : [], 'bw' : []}
+        for layers in self.read_block_units:
+
+            # Layer
+            cell_fw = tf.contrib.rnn.LSTMCell(layers)
+            cell_bw = tf.contrib.rnn.LSTMCell(layers)
+
+            self.read_block_cells['fw'].append(cell_fw)
+            self.read_block_cells['bw'].append(cell_bw)
+
+            # State
+            state_fw = cell_fw.zero_state(self.batch_size, tf.float32)
+            state_bw = cell_bw.zero_state(self.batch_size, tf.float32)
+
+            self.read_block_states['fw'].append(state_fw)
+            self.read_block_states['bw'].append(state_bw)
+
+        # Define process block params
+        self.process_block_cell = MyLSTMCell(num_units = self.read_block_units[-1]*4,
+                                             num_out = self.read_block_units[-1]*2)
+        self.process_block_state_start = self.process_block_cell.zero_state(self.batch_size, tf.float32)
+
+        if self.verbose:
+            print "OK!"
+
+    def _define_read_block(self, input, scope='read_block'):
+        """
+        Calculate forward propagation of a RNN.
+
+        Args:
+            input (np.ndarray of shape [B, X, N, 3]): input pointclouds, where B: batch size, X: 1
+                (one pointcloud) or 3 (triplet of pointclouds), N: number of points in each pointcloud.
+        Returns:
+            (np.ndaray of shape [B, X, N, R]): embedding of each cloud, where B: batch_size, X: 1 (one
+                pointcloud) or 3 (triplet of pointclouds), N: number of points in each pointcloud,
+                R: number of features for every point.
+        """
+        with tf.name_scope(scope):
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+
+            if len(inputs) == 1:
+                
+                if self.verbose:
+                    sys.stdout.write("Defining read block for embedding...")
+                    sys.stdout.flush()
+
+                out, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.read_block_cells['fw'], self.read_block_cells['bw'],
+                                                                           initial_states_fw=self.read_block_states['fw'],
+                                                                           initial_states_bw=self.read_block_states['bw'],
+                                                                           inputs=inputs[0], dtype=tf.float32,
+                                                                           scope="rnn")
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([out], axis=1)
+            elif len(inputs) == 3:
+
+                if self.verbose:
+                    sys.stdout.write("Defining read block for anchor...")
+                    sys.stdout.flush()
+
+                anr, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.read_block_cells['fw'], self.read_block_cells['bw'],
+                                                                           initial_states_fw=self.read_block_states['fw'],
+                                                                           initial_states_bw=self.read_block_states['bw'],
+                                                                           inputs=inputs[0], dtype=tf.float32,
+                                                                           scope="anchor")
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining read block for positive...")
+                    sys.stdout.flush()
+
+                pos, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.read_block_cells['fw'], self.read_block_cells['bw'],
+                                                                           initial_states_fw=self.read_block_states['fw'],
+                                                                           initial_states_bw=self.read_block_states['bw'],
+                                                                           inputs=inputs[1], dtype=tf.float32,
+                                                                           scope="positive")
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining read block for negative...")
+                    sys.stdout.flush()
+
+                neg, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(self.read_block_cells['fw'], self.read_block_cells['bw'],
+                                                                           initial_states_fw=self.read_block_states['fw'],
+                                                                           initial_states_bw=self.read_block_states['bw'],
+                                                                           inputs=inputs[2], dtype=tf.float32,
+                                                                           scope="negative")
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([anr, pos, neg], axis=1)
+            else:
+                raise ValueError("I cannot handle this!")
+
+            # return
+            return ret
+
+    def _define_process_block_step(self, M, process_block_state):
+
+        if self.verbose:
+            sys.stdout.write('.')
+            sys.stdout.flush()
+
+        # Equation 3
+        _, (c, q) = tf.nn.static_rnn(cell = self.process_block_cell,
+                                     inputs = [tf.zeros([self.batch_size, 0])],
+                                     initial_state=process_block_state)
+
+        # Equation 4
+        m = tf.unstack(M, axis=0)
+        q = tf.unstack(q, axis=0)
+        e = []
+        for i in range(len(m)):
+            e.append(tf.einsum('ij,j', m[i], q[i]))
+        e = tf.stack(e, axis=0)
+
+        # Equation 5
+        a = tf.exp(e) / tf.reduce_sum(tf.exp(e), axis=1, keepdims=True)
+
+        # Equation 6
+        a_sum = tf.reduce_sum(a, axis=1, keepdims=True)
+        r = tf.reduce_mean(M * tf.expand_dims(a, -1), axis=1) / a_sum
+
+        # Equation 7
+        state = tf.contrib.rnn.LSTMStateTuple(c, tf.concat([q, r], axis=1))
+
+        # Return last hidden state
+        return state
+
+    def _define_process_block(self, input):
+        """
+        Calculate forward propagation of a RNN.
+
+        Args:
+            input (np.ndaray of shape [B, X, N, D]): embedding of each cloud, where B: batch_size,
+                X: 1 (one pointcloud) or 3 (triplet of pointclouds), N: number of points in each
+                pointcloud, D: number of features for every point.
+        Returns:
+            (np.ndaray of shape [B, X, R]): embedding of each cloud, where B: batch_size,
+                X: 1 (one pointcloud) or 3 (triplet of pointclouds), R: number of features for
+                every point cloud
+        """
+
+        with tf.name_scope("rnn"):
+
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+
+            if len(inputs) == 1:
+
+                if self.verbose:
+                    sys.stdout.write("Defining process block for embedding")
+                    sys.stdout.flush()
+
+                # Process block
+                state = self._define_process_block_step(inputs[0], self.process_block_state_start)
+                for _ in range(1, self.process_block_steps):
+                    state = self._define_process_block_step(inputs[0], state)
+
+                if self.verbose:
+                    print "OK!"
+
+                # Return 
+                ret = tf.stack([state[1]], axis=1)
+
+            elif len(inputs) == 3:
+
+                if self.verbose:
+                    sys.stdout.write("Defining process block for anchor")
+                    sys.stdout.flush()
+
+                # Process block anchor
+                anchor_state = self._define_process_block_step(inputs[0], self.process_block_state_start)
+                for _ in range(1, self.process_block_steps):
+                    anchor_state = self._define_process_block_step(inputs[0], anchor_state)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining process block for positive")
+                    sys.stdout.flush()
+
+                # Process block positive
+                positive_state = self._define_process_block_step(inputs[1], self.process_block_state_start)
+                for _ in range(1, self.process_block_steps):
+                    positive_state = self._define_process_block_step(inputs[1], positive_state)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining process block for negative")
+                    sys.stdout.flush()
+
+                # Process block negative
+                negative_state = self._define_process_block_step(inputs[2], self.process_block_state_start)
+                for _ in range(1, self.process_block_steps):
+                    negative_state = self._define_process_block_step(inputs[2], negative_state)
+
+                if self.verbose:
+                    print "OK!"
+
+                # Return 
+                ret = tf.stack([[anchor_state[1]], [positive_state[1]], [negative_state[1]]], axis=1)
+            else:
+                raise ValueError("I cannot handle this!")
+
+            # return
+            return ret
+
+    def _calculate_loss(self, embeddings):
+        """
+        Calculate loss.
+
+        Args:
+            embeddings (np.ndaray of shape [B, 3, E]): embedding of each cloud, where
+                B: batch_size, E: size of an embedding of a pointcloud.
+        Returns:
+            (float): Loss of current batch.
+        """
+
+        if self.verbose:
+            sys.stdout.write("Defining loss function...")
+            sys.stdout.flush()
+
+        with tf.name_scope("loss"):
+            embeddings_list = tf.unstack(embeddings, axis=1)
+            #return self._tripplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
+            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+
+        if self.verbose:
+            print "OK!"
+
+    def _define_optimizer(self, loss_function):
+        """
+        Define optimizer operation.
+        """
+
+        with tf.name_scope("optimizer"):
+            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
+
+    def get_embeddings(self):
+        """
+        Get embeddings to be run with a batch of a single pointclouds to find hard triplets to train. 
+        """
+        return self.cloud_embedding_embdg
+
+    def save_model(self, session):
+        """
+        Save the model in the model dir.
+
+        Args:
+            session (tf.Session): Session which one want to save model.
+        """
+        saver = tf.train.Saver()
+        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join("models_feature_extractor", name)) 
