@@ -46,7 +46,7 @@ def save_embeddings(device):
         sess.run(tf.global_variables_initializer())
          
         # saver    
-        saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
+        saver.restore(sess, tf.train.latest_checkpoint('models_17'))
         
         # Do the training loop
         global_batch_idx = 1

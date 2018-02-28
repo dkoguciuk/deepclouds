@@ -99,52 +99,6 @@ def train_classification(name, batch_size, epochs, learning_rate, device):
         save_path = model_classifier.save_model(sess)
         print "Model saved in file: %s" % save_path
 
-def save_embeddings(device):
-    # Reset
-    tf.reset_default_graph()
-
-    # Generate data if needed
-    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
-
-    # Define model
-    with tf.device(device):
-        model_features = RNNBidirectionalModel([CLOUD_SIZE * 3, 40], [2*40*CLOUD_SIZE, 40],
-                                               1, 0.1, 0.2, pointcloud_size=CLOUD_SIZE)  
-
-    # Saver
-    saver = tf.train.Saver()
-    
-    if os.path.exists("embeddings"):
-        shutil.rmtree("embeddings")
-    os.mkdir("embeddings")
-
-    config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
-    with tf.Session(config=config) as sess:
-
-        # Run the initialization
-        sess.run(tf.global_variables_initializer())
-         
-        # saver    
-        saver.restore(sess, tf.train.latest_checkpoint('models'))
-        
-        # Do the training loop
-        global_batch_idx = 1
-        summary_skip_batch = 1
-
-        # loop for all batches
-        index = 1
-        for clouds, labels in data_gen.generate_representative_batch(1):
-        
-            # count embeddings
-            embedding_input = np.stack([clouds], axis=1)
-            embeddings = sess.run(model_features.get_embeddings(), feed_dict={model_features.placeholder_embdg: embedding_input})
-            
-            data_filapath = "embeddings/data_%04d.npy" % index
-            label_filapath = "embeddings/label_%04d.npy" % index
-            np.save(data_filapath, embeddings)
-            np.save(label_filapath, labels)
-            index = index+1
-
 def main(argv):
 
     # Parser

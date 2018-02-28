@@ -543,7 +543,8 @@ class OrderMattersModel(GenericModel):
 
     def __init__(self, batch_size, pointcloud_size,
                  read_block_units, process_block_steps,
-                 normalize_embedding=True, margin=0.2, learning_rate=0.001, verbose=True):
+                 normalize_embedding=True, verbose=True,
+                 margin=0.2, learning_rate=0.0001, gradient_clip=10.0):
         """
         Build a model.
         Args:
@@ -566,6 +567,7 @@ class OrderMattersModel(GenericModel):
         self.margin = margin
         self.normalize_embedding = normalize_embedding
         self.learning_rate = learning_rate
+        self.gradient_clip = gradient_clip
         self.verbose = verbose
         self.summaries = []
 
@@ -617,8 +619,8 @@ class OrderMattersModel(GenericModel):
         for layers in self.read_block_units:
 
             # Layer
-            cell_fw = tf.contrib.rnn.LSTMCell(layers)
-            cell_bw = tf.contrib.rnn.LSTMCell(layers)
+            cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
 
             self.read_block_cells['fw'].append(cell_fw)
             self.read_block_cells['bw'].append(cell_bw)
@@ -851,7 +853,19 @@ class OrderMattersModel(GenericModel):
         """
 
         with tf.name_scope("optimizer"):
-            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
+            # Compute grads
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+            tvars = tf.trainable_variables()
+            grads_and_vars = optimizer.compute_gradients(loss_function)
+            # Summary
+            for grad, var in grads_and_vars:
+                self.summaries.append(tf.summary.scalar(var.name, tf.norm(grad)))
+            # Clip
+            if self.gradient_clip > 0:
+                grads, vars = zip(*grads_and_vars)
+                clipped_grads, _ = tf.clip_by_global_norm(grads, self.gradient_clip)
+                grads_and_vars = zip(clipped_grads, vars)
+            return optimizer.apply_gradients(grads_and_vars)
 
     def get_embeddings(self):
         """

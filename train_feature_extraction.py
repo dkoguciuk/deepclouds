@@ -49,7 +49,7 @@ def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
     
     return hard_positives_indices, hard_negatives_indices 
 
-def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, margin, device,
+def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, gradient_clip, margin, device,
                                         rnn_layer_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE * 3, CLOUD_SIZE * 3],
                                         mlp_layer_sizes=[CLOUD_SIZE * 3 * 2 * CLOUD_SIZE, 128]):
     """
@@ -69,7 +69,8 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
 #                                       pointcloud_size=CLOUD_SIZE)
         model = OrderMattersModel(batch_size = batch_size, pointcloud_size = CLOUD_SIZE, margin=margin,
                                   read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
-                                  process_block_steps=32, learning_rate=learning_rate)
+                                  process_block_steps=32, learning_rate=learning_rate,
+                                  gradient_clip=gradient_clip)
         # pierwsze testy z 32 krokami process_block_steps
         # oraz z log2 3*cloud_size (96) 
 
@@ -86,11 +87,11 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
  
         # Do the training loop
         global_batch_idx = 1
-        #summary_skip_batch = 1
+        summary_skip_batch = 1
         for epoch in range(epochs):
  
             # loop for all batches
-            index = 1
+            epoch_batch_idx = 1
             for clouds, labels in data_gen.generate_representative_batch(train=True,
                                                                          batch_size=batch_size,
                                                                          shuffle_points=False,
@@ -118,15 +119,15 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                 ##################################################################################################
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
-                 
+
                 # run optimizer
                 _, loss, summary_train = sess.run([model.get_optimizer(), model.get_loss_function(), model.get_summary()],
                                                   feed_dict={model.placeholder_train: training_input})
-                 
+
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
                 ##################################################################################################
-                 
+
                 # Get test embeddings
                 test_embeddings = { k : [] for k in range(40)}
                 for clouds, labels in data_gen.generate_random_batch(False, 80):# 400 test examples / 80 clouds = 5 batches
@@ -138,16 +139,50 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                     # add embeddings
                     for cloud_idx in range(labels.shape[0]):
                         test_embeddings[labels[cloud_idx]].append(test_embedding[cloud_idx].tolist())
-                 
+
                 # Convert to numpy
                 class_embeddings = []
                 for k in range(40):
                     class_embeddings.append(test_embeddings[k])
                 class_embeddings = np.stack(class_embeddings, axis=0)
- 
-                # calc distances                
-                pos = np.sqrt(np.sum((class_embeddings[:,:-1,:] - class_embeddings[:,1:,:]) **2, axis=2))
-                neg = np.sqrt(np.sum((class_embeddings[:-1,:,:] - class_embeddings[1:,:,:]) **2, axis=2))
+
+#                 # calc distances                
+#                 pos = np.sqrt(np.sum((class_embeddings[:,:-1,:] - class_embeddings[:,1:,:]) **2, axis=2))
+#                 neg = np.sqrt(np.sum((class_embeddings[:-1,:,:] - class_embeddings[1:,:,:]) **2, axis=2))
+
+                # Calc distances between every embedding in one class 
+                pos_man = []
+                for class_idx in range(class_embeddings.shape[0]):
+                    positive_dist_class = []
+                    for instance_idx_1 in range(class_embeddings.shape[1]):
+                        for instance_idx_2 in range(class_embeddings.shape[1]):
+                            if instance_idx_1 != instance_idx_2:
+                                positive_dist_class.append(np.linalg.norm(class_embeddings[class_idx][instance_idx_1] -
+                                                                          class_embeddings[class_idx][instance_idx_2]))
+                    pos_man.append(positive_dist_class)
+
+#                 for class_idx in range(len(pos_man)):
+#                     print "INNER CLASS DISTANCE [", class_idx, "] = ", np.mean(pos_man[class_idx])
+#                 print "POS_DIST = ", np.mean(pos_man)
+#                 print "AUTOMATIC POS DIST = ", np.mean(pos)
+
+                # Calc distances between every embedding in one class and every other class
+                neg_man = []
+                for class_idx_1 in range(class_embeddings.shape[0]):
+                    negative_dist_class = []
+                    for class_idx_2 in range(class_embeddings.shape[0]):
+                        if class_idx_1 != class_idx_2:
+                            for instance_idx_1 in range(class_embeddings.shape[1]):
+                                for instance_idx_2 in range(class_embeddings.shape[1]):
+                                    if instance_idx_1 != instance_idx_2:
+                                        negative_dist_class.append(np.linalg.norm(class_embeddings[class_idx_1][instance_idx_1] -
+                                                                                  class_embeddings[class_idx_2][instance_idx_2]))
+                    neg_man.append(negative_dist_class)
+
+#                 for class_idx in range(len(neg_man)):
+#                     print "INTRA CLASS DISTANCE [", class_idx, "] = ", np.mean(neg_man[class_idx])
+#                 print "NEG_DIST = ", np.mean(neg_man)
+#                 print "AUTOMATIC NEG DIST = ", np.mean(neg)
                  
                 ##################################################################################################
                 ############################################# SUMMARIES ##########################################
@@ -155,14 +190,14 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                  
                 # Add summary
                 summary_test = tf.Summary()
-                summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=np.mean(neg)-np.mean(pos))
+                summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=np.mean(neg_man)-np.mean(pos_man))
                 writer.add_summary(summary_test, global_batch_idx)
                 writer.add_summary(summary_train, global_batch_idx)
                 global_batch_idx += 1
  
                 # Info
-                print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f" % (epoch + 1, index, loss, np.mean(neg)-np.mean(pos))
-                index += 1
+                print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f" % (epoch + 1, epoch_batch_idx, loss, np.mean(neg_man)-np.mean(pos_man))
+                epoch_batch_idx += 1
         
         # Save model
         save_path = model.save_model(sess)
@@ -176,13 +211,15 @@ def main(argv):
     parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=80)
     parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=25)
     parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
+    parser.add_argument("-g", "--gradient_clip", help="Max gradient value, gradient clipping disabled when smaller than zero", type=float, required=False, default=10.0)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")
     parser.add_argument("-m", "--margin", help="Triple loss margin value", type=float, required=False, default=0.2)
     args = vars(parser.parse_args())
 
     # train
     train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                                        learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+                                        learning_rate=args["learning_rate"], gradient_clip=args["gradient_clip"],
+                                        margin=args["margin"], device=args["device"])
 
     # Print all settings at the end of learning
     print "Training params:"
