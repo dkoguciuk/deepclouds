@@ -28,7 +28,7 @@ def save_embeddings(device):
 
     # Define model
     with tf.device(device):
-        model = OrderMattersModel(batch_size = 1, pointcloud_size = CLOUD_SIZE,
+        model = OrderMattersModel(batch_size = 40, pointcloud_size = CLOUD_SIZE,
                                   read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
                                   process_block_steps=32)
 
@@ -55,7 +55,7 @@ def save_embeddings(device):
         # loop for all batches
         index = 1
         for clouds, labels in data_gen.generate_representative_batch(train=True,
-                                                                     batch_size=1,
+                                                                     instances_number=1,
                                                                      shuffle_points=False,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=True):
@@ -63,12 +63,14 @@ def save_embeddings(device):
             # count embeddings
             embedding_input = np.stack([clouds], axis=1)
             embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input})
-            
-            data_filapath = "embeddings/data_%04d.npy" % index
-            label_filapath = "embeddings/label_%04d.npy" % index
-            np.save(data_filapath, embeddings)
-            np.save(label_filapath, labels)
+
+            for class_idx in range(40):
+                data_filapath = "embeddings/data_%04d.npy" % (index*40 + class_idx)
+                label_filapath = "embeddings/label_%04d.npy" % (index*40 + class_idx)
+                np.save(data_filapath, embeddings[class_idx])
+                np.save(label_filapath, labels[class_idx])
             index = index+1
+            
 
 def main(argv):
 

@@ -56,13 +56,14 @@ class EmailSender(object):
 
 if __name__ == "__main__":
 
-    for margin in [0.4, 0.5]:
-        for epochs in [100]:#, 100, 150, 200]:
+    #for margin in [0.1, 0.2, 0.3, 0.4, 0.5]:
+    for margin in [0.2]:
+        for epochs in [500]:#, 100, 150, 200]:
     #        for learning_rate in [10 ** (-i) for i in range(2, 7)]:
             #for learning_rate in [0.01, 0.001, 0.0001, 0.00001]:
             for learning_rate in [0.0001]:
     #            name = "hparam_lr:" + "{0:.6f}".format(learning_rate) + "_margin:" + "{0:.2f}".format(margin)
-                name = "hparam_margin:" + "{0:.6f}".format(margin)
+                name = "hparam_margin:" + "{0:.6f}".format(margin) + "_gen3_500"
                 train_feature_extraction.train_synthetic_features_extraction(name=name, batch_size=80,
                                                                              epochs=epochs,
                                                                              learning_rate=learning_rate, margin=margin, gradient_clip=10.0,

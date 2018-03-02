@@ -44,6 +44,12 @@ class GenericModel(object):
         """
         return self.optimizer
 
+    def get_embeddings(self):
+        """
+        Get embeddings to be run with a batch of a single pointclouds to find hard triplets to train. 
+        """
+        return self.cloud_embedding_embdg
+
     @classmethod
     def get_model_name(cls):
         """
@@ -53,6 +59,18 @@ class GenericModel(object):
             (str): Model name of the class.
         """
         return cls.MODEL_NAME
+
+    @classmethod
+    def save_model(cls, session):
+        """
+        Save the model in the model dir.
+
+        Args:
+            session (tf.Session): Session which one want to save model.
+        """
+        saver = tf.train.Saver()
+        name = cls.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join("models_feature_extractor", name)) 
 
     def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin, batch_size):
         """
@@ -305,7 +323,7 @@ class RNNBidirectionalModel(GenericModel):
         
         # calculate embedding
         with tf.name_scope("find_hard_triplets"):
-            self.embeddings = tf.squeeze(self._calculate_embeddings(self.placeholder_embdg))
+            self.cloud_embedding_embdg = tf.squeeze(self._calculate_embeddings(self.placeholder_embdg))
         
         # calculate loss & optimizer
         with tf.name_scope("train"):
@@ -316,23 +334,6 @@ class RNNBidirectionalModel(GenericModel):
         
         # merge summaries and write        
         self.summary = tf.summary.merge(self.summaries)
-
-    def get_embeddings(self):
-        """
-        Get embeddings to be run with a batch of a single pointclouds to find hard triplets to train. 
-        """
-        return self.embeddings
-
-    def save_model(self, session):
-        """
-        Save the model in the model dir.
-
-        Args:
-            session (tf.Session): Session which one want to save model.
-        """
-        saver = tf.train.Saver()
-        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
-        return saver.save(session, os.path.join("models_feature_extractor", name))      
 
     def _init_params(self):
         """
@@ -583,6 +584,7 @@ class OrderMattersModel(GenericModel):
         # Get hard triplets
         with tf.name_scope("get_embedding"):
             self.memory_vector_embdg = self._define_read_block(self.placeholder_embdg)
+            #self.memory_vector_embdg = tf.nn.l2_normalize(self.memory_vector_embdg, axis=-1, epsilon=1e-10)
             with tf.name_scope("process_block"):
                 self.cloud_embedding_embdg = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
                 if self.normalize_embedding:
@@ -591,6 +593,7 @@ class OrderMattersModel(GenericModel):
         # Train procedure
         with tf.name_scope("train"):
             self.memory_vector_train = self._define_read_block(self.placeholder_train)
+            #self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
             with tf.name_scope("process_block"):
                 self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
                 # normalize embedding
@@ -619,8 +622,11 @@ class OrderMattersModel(GenericModel):
         for layers in self.read_block_units:
 
             # Layer
-            cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
-            cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            #cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            #cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            
+            cell_fw = tf.contrib.rnn.LSTMCell(layers)
+            cell_bw = tf.contrib.rnn.LSTMCell(layers)
 
             self.read_block_cells['fw'].append(cell_fw)
             self.read_block_cells['bw'].append(cell_bw)
@@ -857,29 +863,12 @@ class OrderMattersModel(GenericModel):
             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             tvars = tf.trainable_variables()
             grads_and_vars = optimizer.compute_gradients(loss_function)
-            # Summary
-            for grad, var in grads_and_vars:
-                self.summaries.append(tf.summary.scalar(var.name, tf.norm(grad)))
             # Clip
             if self.gradient_clip > 0:
                 grads, vars = zip(*grads_and_vars)
                 clipped_grads, _ = tf.clip_by_global_norm(grads, self.gradient_clip)
                 grads_and_vars = zip(clipped_grads, vars)
+            # Summary
+            for grad, var in grads_and_vars:
+                self.summaries.append(tf.summary.scalar(var.name, tf.norm(grad)))
             return optimizer.apply_gradients(grads_and_vars)
-
-    def get_embeddings(self):
-        """
-        Get embeddings to be run with a batch of a single pointclouds to find hard triplets to train. 
-        """
-        return self.cloud_embedding_embdg
-
-    def save_model(self, session):
-        """
-        Save the model in the model dir.
-
-        Args:
-            session (tf.Session): Session which one want to save model.
-        """
-        saver = tf.train.Saver()
-        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
-        return saver.save(session, os.path.join("models_feature_extractor", name)) 

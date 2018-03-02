@@ -573,18 +573,19 @@ class SyntheticData(GenericData):
 
     def generate_representative_batch(self,
                                       train,
-                                      batch_size=80,
+                                      instances_number=2,
                                       shuffle_points=False,
                                       jitter_points=False,
                                       rotate_pointclouds=False,
                                       reshape_flags=[]):
         """
-        Take batch_size pointclouds with at least 2 instances of each class.
+        Take pointclouds with at least instances_number of each class.
     
         Args:
             train (bool): Should we take pointclouds from train or test dataset?
-            batch_size (int): Size of a batch, please consider we assume every object should appear
-                at least two times in the batch, so recommended batch size is 80 with 2 identities per batch.
+            instances_number (int): Size of a batch expressed in instances_number of each CLASSES_COUNT,
+                resulting in batch_size equals instances_number * CLASSES_COUNT. Please assume every
+                object should appear at least two times in the batch, so recommended batches_number is 2.
             shuffle_points (boolean): Should we shuffle points in the pointclouds?
             jitter_points (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
@@ -612,18 +613,28 @@ class SyntheticData(GenericData):
             start_idx = filepath.rfind("/") + 1
             stop_idx = filepath.rfind("_")
             pointclouds_indices.append(int(filepath[start_idx:stop_idx]))
-        pointclouds_filepaths = [path for _,path in sorted(zip(pointclouds_indices, pointclouds_filepaths))]
+        filpaths_sorted = [path for _,path in sorted(zip(pointclouds_indices, pointclouds_filepaths))]
+        
+        # filepaths
+        instances_count = len(filpaths_sorted)/self.CLASSES_COUNT
+        filepaths = []
+        for class_idx in range(self.CLASSES_COUNT):
+            class_filepaths = []
+            for instance_idx in range(instances_count):
+                class_filepaths.append(filpaths_sorted[self.CLASSES_COUNT*instance_idx + class_idx])
+            filepaths.append(class_filepaths)
 
         # iterate over batches
-        for batch_idx in range(int(len(pointclouds_filepaths) / batch_size)):
+        for _ in range(int(len(pointclouds_filepaths) / (instances_number * self.CLASSES_COUNT))):
             batch_clouds = []
             batch_labels = []
-            for cloud_idx in range(batch_size):
-                global_idx = batch_idx * batch_size + cloud_idx
-                global_class = int(pointclouds_filepaths[global_idx][pointclouds_filepaths[global_idx].rfind("_") + 1 :
-                                                                     pointclouds_filepaths[global_idx].rfind(".")])
-                batch_clouds.append(np.load(pointclouds_filepaths[global_idx]))
-                batch_labels.append(global_class)
+            for instance_idx in range(instances_number):
+                for class_idx in range(self.CLASSES_COUNT):
+                    filepath = random.choice(filepaths[class_idx])
+                    filepaths[class_idx].remove(filepath)
+                    cloud_class = int(filepath[filepath.rfind("_") + 1 : filepath.rfind(".")])
+                    batch_clouds.append(np.load(filepath))
+                    batch_labels.append(cloud_class)
             # stack
             batch_clouds = np.stack(batch_clouds, axis=0)
             batch_clouds = np.stack([batch_clouds], axis=1)
