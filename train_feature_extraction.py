@@ -11,6 +11,7 @@ import shutil
 import argparse
 import numpy as np
 import tensorflow as tf
+from scipy import spatial
 import siamese_pointnet.defines as df
 import siamese_pointnet.modelnet_data as modelnet
 from siamese_pointnet.classifiers import MLPClassifier
@@ -18,7 +19,7 @@ from siamese_pointnet.model import RNNBidirectionalModel, MLPModel, OrderMatters
 
 CLOUD_SIZE = 32
 
-def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
+def find_semi_hard_triples_to_train(embeddings, labels, margin):
     
     def find_nearest_idx(array, value):
         return (np.abs(array-value)).argmin()
@@ -49,7 +50,10 @@ def find_semi_hard_triples_to_train_1(embeddings, labels, margin):
     
     return hard_positives_indices, hard_negatives_indices 
 
-def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, gradient_clip, margin, device,
+def train_synthetic_features_extraction(name, batch_size, epochs,
+                                        learning_rate = None, gradient_clip = None,
+                                        margin=None, margin_growth=None, 
+                                        device = None,
                                         rnn_layer_sizes=[CLOUD_SIZE * 3, CLOUD_SIZE * 3, CLOUD_SIZE * 3],
                                         mlp_layer_sizes=[CLOUD_SIZE * 3 * 2 * CLOUD_SIZE, 128]):
     """
@@ -63,14 +67,19 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
     data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
 
     # Define model
-    with tf.device(device):
+    with tf.variable_scope("end-to-end"):
+        with tf.device(device):
 #         model = RNNBidirectionalModel(rnn_layer_sizes, mlp_layer_sizes,
 #                                       batch_size, learning_rate, margin, normalize_embedding=True,
 #                                       pointcloud_size=CLOUD_SIZE)
-        model = OrderMattersModel(batch_size = batch_size, pointcloud_size = CLOUD_SIZE, margin=margin,
-                                  read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
-                                  process_block_steps=32, learning_rate=learning_rate,
-                                  gradient_clip=gradient_clip)
+            model = OrderMattersModel(train=True,
+                                      batch_size = batch_size, pointcloud_size = CLOUD_SIZE,# margin=margin,
+                                      #read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
+                                      read_block_units = [256],
+                                      #read_block_units = [2*(2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1))],
+                                      process_block_steps=16, learning_rate=learning_rate,
+                                      #process_block_steps=64, learning_rate=learning_rate,
+                                      gradient_clip=gradient_clip)
         # pierwsze testy z 32 krokami process_block_steps
         # oraz z log2 3*cloud_size (96) 
 
@@ -80,6 +89,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
 
     # Session
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
+    config.gpu_options.allow_growth=True
     with tf.Session(config=config) as sess:
  
         # Run the initialization
@@ -89,17 +99,29 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
 #         writer.add_graph(sess.graph)
  
+        histograms = []
+        variables_names = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
+                                            scope="end-to-end")
+        for var in variables_names:
+            histograms.append(tf.summary.histogram(var.name, var))
+        hist_summary = tf.summary.merge(histograms)
+ 
         # Do the training loop
         global_batch_idx = 1
         summary_skip_batch = 10
         checkpoint_skip_epochs = 25
-        for epoch in range(epochs):
+        losses_vec = []
+        for epoch in range(1, epochs+1):
+ 
+#             # margin growth
+#             if margin_growth and epoch % 100 == 0:
+#                 margin = margin + 0.1
  
             # loop for all batches
             epoch_batch_idx = 1
             for clouds, labels in data_gen.generate_representative_batch(train=True,
                                                                          instances_number=2,
-                                                                         shuffle_points=False,
+                                                                         shuffle_points=True,
                                                                          jitter_points=True,
                                                                          rotate_pointclouds=True):
 
@@ -109,10 +131,11 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                  
                 # count embeddings
                 embedding_input = np.stack([clouds], axis=1)
-                embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input})
+                embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input,
+                                                                         model.margin : [margin]})
                  
                 # Find hard examples to train on
-                pos_indices, neg_indices = find_semi_hard_triples_to_train_1(embeddings, labels, margin)
+                pos_indices, neg_indices = find_semi_hard_triples_to_train(embeddings, labels, margin)
                   
                 # Create triples to train
                 pos_clouds = np.copy(clouds)
@@ -127,7 +150,8 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
  
                 # run optimizer
                 _, loss, summary_train = sess.run([model.get_optimizer(), model.get_loss_function(), model.get_summary()],
-                                                  feed_dict={model.placeholder_train: training_input})
+                                                  feed_dict={model.placeholder_train: training_input,
+                                                             model.margin : [margin]})
  
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
@@ -162,6 +186,8 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                                 if instance_idx_1 != instance_idx_2:
                                     positive_dist_class.append(np.linalg.norm(class_embeddings[class_idx][instance_idx_1] -
                                                                               class_embeddings[class_idx][instance_idx_2]))
+#                                     positive_dist_class.append(spatial.distance.cosine(class_embeddings[class_idx][instance_idx_1],
+#                                                                                        class_embeddings[class_idx][instance_idx_2]))
                         pos_man.append(positive_dist_class)
      
                     # Calc distances between every embedding in one class and every other class
@@ -175,26 +201,39 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
                                         if instance_idx_1 != instance_idx_2:
                                             negative_dist_class.append(np.linalg.norm(class_embeddings[class_idx_1][instance_idx_1] -
                                                                                       class_embeddings[class_idx_2][instance_idx_2]))
+#                                             negative_dist_class.append(spatial.distance.cosine(class_embeddings[class_idx_1][instance_idx_1],
+#                                                                                                class_embeddings[class_idx_2][instance_idx_2]))
                         neg_man.append(negative_dist_class)
                       
                     ##################################################################################################
                     ############################################# SUMMARIES ##########################################
                     ##################################################################################################
                       
+                    # Variables histogram
+                    summary_histograms = sess.run(hist_summary)
+                    writer.add_summary(summary_histograms, global_batch_idx)
+                      
                     # Add summary
                     summary_test = tf.Summary()
                     summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=np.mean(neg_man)-np.mean(pos_man))
+                    summary_test.value.add(tag="%smargin" % "", simple_value=margin)
                     writer.add_summary(summary_test, global_batch_idx)
                     writer.add_summary(summary_train, global_batch_idx)
                     print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f" % (epoch + 1, epoch_batch_idx, loss, np.mean(neg_man)-np.mean(pos_man))
+                    
+                    if margin_growth and len(model.non_zero_triplets) > 100:
+                        if np.mean(model.non_zero_triplets[-100:]) < batch_size/2 :
+                            margin = margin + 0.05
 
                 # increment vars
                 epoch_batch_idx += 1
                 global_batch_idx += 1
+                losses_vec.append(loss)
         
-            if epoch != 0 and epoch % checkpoint_skip_epochs == 0:
+            if epoch % checkpoint_skip_epochs == 0:
+
                 # Save model
-                save_path = model.save_model(sess)
+                save_path = model.save_model(sess, name)
                 print "Model saved in file: %s" % save_path
 
 def main(argv):
@@ -204,16 +243,17 @@ def main(argv):
     parser.add_argument("-n", "--name", help="Name of the run", type=str, required=True)
     parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=80)
     parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=25)
-    parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
+    parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=False, default=0.0001)
     parser.add_argument("-g", "--gradient_clip", help="Max gradient value, gradient clipping disabled when smaller than zero", type=float, required=False, default=10.0)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")
     parser.add_argument("-m", "--margin", help="Triple loss margin value", type=float, required=False, default=0.2)
+    parser.add_argument("-t", "--margin_growth", help="Allow margin growth in time", type=bool, required=False, default=True)
     args = vars(parser.parse_args())
 
     # train
     train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
                                         learning_rate=args["learning_rate"], gradient_clip=args["gradient_clip"],
-                                        margin=args["margin"], device=args["device"])
+                                        margin=args["margin"], device=args["device"], margin_growth=args["margin_growth"])
 
     # Print all settings at the end of learning
     print "Training params:"

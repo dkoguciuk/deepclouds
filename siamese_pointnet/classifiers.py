@@ -32,43 +32,44 @@ class MLPClassifier(md.GenericModel):
         self.learning_rate = learning_rate
         self.summaries = []
         
-        with tf.name_scope(self.MODEL_NAME):
+        with tf.variable_scope(self.MODEL_NAME):
+            with tf.name_scope(self.MODEL_NAME):
+            
+                # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
+                with tf.name_scope("placeholders"):
+                    self.placeholder_embed = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="input_embedding")
+                    self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[-1]], name="true_labels")
         
-            # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
-            with tf.name_scope("placeholders"):
-                self.placeholder_embed = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="input_embedding")
-                self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[-1]], name="true_labels")
-    
-            # init MLP params
-            with tf.name_scope("params"):
-                self._init_params()
-            
-            # calculate loss & optimizer
-            with tf.name_scope("train"):
-                self.classification_pred = self._define_classifier(self.placeholder_embed)
-                self.loss = self._calculate_loss(self.classification_pred, self.placeholder_label)
-                self.optimizer = self._define_optimizer(self.loss)
-                self.summaries.append(tf.summary.scalar('loss', self.loss))
-            
-            # merge summaries and write        
-            self.summary = tf.summary.merge(self.summaries)
+                # init MLP params
+                with tf.name_scope("params"):
+                    self._init_params()
+                
+                # calculate loss & optimizer
+                with tf.name_scope("train"):
+                    self.classification_pred = self._define_classifier(self.placeholder_embed)
+                    self.loss = self._calculate_loss(self.classification_pred, self.placeholder_label)
+                    self.optimizer = self._define_optimizer(self.loss)
+                    self.summaries.append(tf.summary.scalar('loss', self.loss))
+                
+                # merge summaries and write        
+                self.summary = tf.summary.merge(self.summaries)
 
     def get_classification_prediction(self):
         """
         Get classification prediction to be run with a batch of a sifnle pointclouds.
         """
-        return tf.nn.softmax(self.classification_pred)
+        return self.classification_pred
 
-    def save_model(self, session):
+    def save_model(self, session, model_name):
         """
         Save the model in the model dir.
 
         Args:
             session (tf.Session): Session which one want to save model.
-        """
+        """    
         saver = tf.train.Saver()
-        name = self.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
-        return saver.save(session, os.path.join("models_classifier", name))      
+        name = model_name + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        return saver.save(session, os.path.join("models_feature_extractor", name))       
 
     def _init_params(self):
         """
@@ -79,10 +80,12 @@ class MLPClassifier(md.GenericModel):
         for layer_idx in range(1, len(self.mlp_layers_sizes)):
             self.mlp_params['class_W' + str(layer_idx)] = tf.get_variable('class_W' + str(layer_idx), 
                                                                           [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
-                                                                          initializer = tf.contrib.layers.xavier_initializer(), )
+                                                                          initializer = tf.contrib.layers.xavier_initializer(),
+                                                                          dtype=tf.float32)
             self.mlp_params["class_b" + str(layer_idx)] = tf.get_variable("class_b" + str(layer_idx),
                                                                           [self.mlp_layers_sizes[layer_idx]],
-                                                                          initializer = tf.zeros_initializer())
+                                                                          initializer = tf.zeros_initializer(),
+                                                                          dtype=tf.float32)
 
     def _define_classifier(self, embeddings):
         """
@@ -116,11 +119,13 @@ class MLPClassifier(md.GenericModel):
             (float): Loss of current batch.
         """
         with tf.name_scope("loss"):
-            return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=true_labels, logits=predictions))
+            return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=true_labels, logits=predictions))
 
     def _define_optimizer(self, loss_function):
         """
         Define optimizer operation.
         """
         with tf.name_scope("optimizer"):
-            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
+            classifier_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope=self.MODEL_NAME)
+            return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function, var_list=classifier_vars)
+        

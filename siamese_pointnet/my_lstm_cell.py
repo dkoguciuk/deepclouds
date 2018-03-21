@@ -25,7 +25,7 @@ _WEIGHTS_VARIABLE_NAME = "kernel"
 class MyLSTMCell(_LayerRNNCell):
     """
     TODO (@dkoguciuk): Description.
-    
+
     Basic LSTM recurrent network cell.
     The implementation is based on: http://arxiv.org/abs/1409.2329.
     We add forget_bias (default: 1) to the biases of the forget gate in order to
@@ -77,7 +77,7 @@ class MyLSTMCell(_LayerRNNCell):
 
         # Inputs must be 2-dimensional.
         self.input_spec = base_layer.InputSpec(ndim=2)
-        
+
         self._num_units = num_units
         self._use_peepholes = use_peepholes
         self._cell_clip = cell_clip
@@ -87,7 +87,7 @@ class MyLSTMCell(_LayerRNNCell):
         self._forget_bias = forget_bias
         self._state_is_tuple = state_is_tuple
         self._activation = activation or math_ops.tanh
-        
+
         if num_out:
             self._state_size = (
                 LSTMStateTuple(num_out, num_units) if state_is_tuple else num_out + num_units)
@@ -100,7 +100,7 @@ class MyLSTMCell(_LayerRNNCell):
     @property
     def state_size(self):
         return self._state_size
-    
+
     @property
     def output_size(self):
         return self._output_size
@@ -109,16 +109,16 @@ class MyLSTMCell(_LayerRNNCell):
         if inputs_shape[1].value is None:
             raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
                              % inputs_shape)
-    
+
         input_depth = inputs_shape[1].value
-        h_depth = self._num_units if self._num_out is None else self._num_out
+        hidden_depth = self._num_units if self._num_out is None else self._num_out
         self._kernel = self.add_variable(
             _WEIGHTS_VARIABLE_NAME,
-            shape=[input_depth + self._num_units, 4 * h_depth],
+            shape=[input_depth + self._num_units, 4 * hidden_depth],
             initializer=self._initializer)
         self._bias = self.add_variable(
             _BIAS_VARIABLE_NAME,
-            shape=[4 * h_depth],
+            shape=[4 * hidden_depth],
             initializer=init_ops.zeros_initializer(dtype=self.dtype))
         if self._use_peepholes:
             self._w_f_diag = self.add_variable("w_f_diag", shape=[self.h_depth],
@@ -153,21 +153,21 @@ class MyLSTMCell(_LayerRNNCell):
         """
         num_out = self._num_units if self._num_out is None else self._num_out
         sigmoid = math_ops.sigmoid
-    
+
         if self._state_is_tuple:
             (c_prev, m_prev) = state
         else:
             c_prev = array_ops.slice(state, [0, 0], [-1, self._num_units])
             m_prev = array_ops.slice(state, [0, self._num_units], [-1, num_out])
-    
+
         input_size = inputs.get_shape().with_rank(2)[1]
         if input_size.value is None:
             raise ValueError("Could not infer input size from inputs.get_shape()[-1]")
-    
+
         # i = input_gate, j = new_input, f = forget_gate, o = output_gate
         lstm_matrix = math_ops.matmul(array_ops.concat([inputs, m_prev], 1), self._kernel)
         lstm_matrix = nn_ops.bias_add(lstm_matrix, self._bias)
-    
+
         i, j, f, o = array_ops.split(value=lstm_matrix, num_or_size_splits=4, axis=1)
 
         # Diagonal connections
@@ -176,7 +176,7 @@ class MyLSTMCell(_LayerRNNCell):
                  sigmoid(i + self._w_i_diag * c_prev) * self._activation(j))
         else:
             c = (sigmoid(f + self._forget_bias) * c_prev + sigmoid(i) * self._activation(j))
-    
+
         if self._cell_clip is not None:
             # pylint: disable=invalid-unary-operand-type
             c = clip_ops.clip_by_value(c, -self._cell_clip, self._cell_clip)
@@ -185,8 +185,7 @@ class MyLSTMCell(_LayerRNNCell):
             m = sigmoid(o + self._w_o_diag * c) * self._activation(c)
         else:
             m = sigmoid(o) * self._activation(c)
-            
-    
+
         new_state = (LSTMStateTuple(c, m) if self._state_is_tuple else
                      array_ops.concat([c, m], 1))
         return m, new_state

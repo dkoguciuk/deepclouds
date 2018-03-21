@@ -60,8 +60,8 @@ class GenericModel(object):
         """
         return cls.MODEL_NAME
 
-    @classmethod
-    def save_model(cls, session):
+    @staticmethod
+    def save_model(session, model_name):
         """
         Save the model in the model dir.
 
@@ -69,20 +69,18 @@ class GenericModel(object):
             session (tf.Session): Session which one want to save model.
         """
         saver = tf.train.Saver()
-        name = cls.MODEL_NAME + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
+        name = model_name + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
         return saver.save(session, os.path.join("models_feature_extractor", name)) 
 
-    def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin, batch_size):
+    def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin):
         """
         Define tripplet loss tensor.
 
         Args:
-            embedding_a (tensor): Output tensor of the anchor cloud.
-            embedding_p (tensor): Output tensor of the positive cloud.
-            embedding_n (tensor): Output tensor of the negative cloud.
+            embedding_a (np.ndaray of shape [B, E]): Output tensor of the anchor cloud.
+            embedding_p (np.ndaray of shape [B, E]): Output tensor of the positive cloud.
+            embedding_n (np.ndaray of shape [B, E]): Output tensor of the negative cloud.
             margin (float): Loss margin.
-            batch_size (float): Barch size.
-
         Returns:
             (tensor): Loss function.
         """ 
@@ -92,8 +90,11 @@ class GenericModel(object):
             with tf.name_scope("dist_neg"):
                 neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=1)
             with tf.name_scope("copute_loss"):
-                basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
-                final_loss = tf.reduce_mean(basic_loss)
+                print embedding_a.get_shape()
+                self.basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
+                self.non_zero_triplets.append(tf.count_nonzero(self.basic_loss))
+                self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets[-1]))
+                final_loss = tf.reduce_mean(self.basic_loss)
             return final_loss
         
     def _tripplet_cosine_loss(self, embedding_a, embedding_p, embedding_n, margin):
@@ -114,11 +115,11 @@ class GenericModel(object):
         """
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, dim=1)
+                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, axis=1)
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, dim=1)
+                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, axis=1)
             with tf.name_scope("copute_loss"):
-                basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
+                basic_loss = tf.minimum(pos_dist - neg_dist - margin, 0.0)
                 final_loss = tf.reduce_mean(basic_loss)
             return final_loss
 
@@ -542,13 +543,15 @@ class OrderMattersModel(GenericModel):
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self, batch_size, pointcloud_size,
+    def __init__(self, train, 
+                 batch_size, pointcloud_size,
                  read_block_units, process_block_steps,
                  normalize_embedding=True, verbose=True,
-                 margin=0.2, learning_rate=0.0001, gradient_clip=10.0):
+                 learning_rate=0.0001, gradient_clip=10.0):
         """
         Build a model.
         Args:
+            train (bool): Are we training or evaluating the model?
             batch_size (int): Batch size of SGD.
             pointcloud_size (int): Number of 3D points in the pointcloud.
             read_block_units (list of ints): List of hidden units -- each number
@@ -561,21 +564,26 @@ class OrderMattersModel(GenericModel):
         """
 
         # Save params
+        self.train = train
         self.batch_size = batch_size
         self.pointcloud_size = pointcloud_size
         self.read_block_units = read_block_units
         self.process_block_steps = process_block_steps
-        self.margin = margin
         self.normalize_embedding = normalize_embedding
         self.learning_rate = learning_rate
         self.gradient_clip = gradient_clip
         self.verbose = verbose
+        self.non_zero_triplets = []
         self.summaries = []
 
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
             self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
-            self.placeholder_train = tf.placeholder(tf.float32, [self.batch_size, 3, self.pointcloud_size, 3], name="input_training")
+        
+        if self.train:
+            with tf.name_scope("placeholders"):
+                self.placeholder_train = tf.placeholder(tf.float32, [self.batch_size, 3, self.pointcloud_size, 3], name="input_training")
+                self.margin = tf.placeholder(tf.float32, shape=1, name="input_margin")
 
         # init params
         with tf.name_scope("params"):
@@ -591,21 +599,22 @@ class OrderMattersModel(GenericModel):
                     self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=1, epsilon=1e-10)
 
         # Train procedure
-        with tf.name_scope("train"):
-            self.memory_vector_train = self._define_read_block(self.placeholder_train)
-            #self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
-            with tf.name_scope("process_block"):
-                self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
-                # normalize embedding
-                if self.normalize_embedding:
-                    self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=2, epsilon=1e-10)
-            with tf.name_scope("optimizer"):
-                self.loss = self._calculate_loss(self.cloud_embedding_train)
-                self.optimizer = self._define_optimizer(self.loss)
-                self.summaries.append(tf.summary.scalar('loss', self.loss))
+        if self.train:
+            with tf.name_scope("train"):
+                self.memory_vector_train = self._define_read_block(self.placeholder_train)
+                #self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
+                with tf.name_scope("process_block"):
+                    self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
+                    # normalize embedding
+                    if self.normalize_embedding:
+                        self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=2, epsilon=1e-10)
+                with tf.name_scope("optimizer"):
+                    self.loss = self._calculate_loss(self.cloud_embedding_train)
+                    self.optimizer = self._define_optimizer(self.loss)
+                    self.summaries.append(tf.summary.scalar('loss', self.loss))
 
-        # merge summaries and write
-        self.summary = tf.summary.merge(self.summaries)
+            # merge summaries and write
+            self.summary = tf.summary.merge(self.summaries)
 
     def _init_params(self):
         """
@@ -823,7 +832,7 @@ class OrderMattersModel(GenericModel):
                     print "OK!"
 
                 # Return 
-                ret = tf.stack([[anchor_state[1]], [positive_state[1]], [negative_state[1]]], axis=1)
+                ret = tf.stack([anchor_state[1], positive_state[1], negative_state[1]], axis=1)
             else:
                 raise ValueError("I cannot handle this!")
 
@@ -848,7 +857,7 @@ class OrderMattersModel(GenericModel):
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
             #return self._tripplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
-            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
 
         if self.verbose:
             print "OK!"

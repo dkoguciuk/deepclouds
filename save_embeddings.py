@@ -27,10 +27,12 @@ def save_embeddings(device):
     data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
 
     # Define model
-    with tf.device(device):
-        model = OrderMattersModel(batch_size = 40, pointcloud_size = CLOUD_SIZE,
-                                  read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
-                                  process_block_steps=32)
+    with tf.variable_scope("end-to-end"):
+        with tf.device(device):
+            model = OrderMattersModel(train=False, batch_size = 40, pointcloud_size = CLOUD_SIZE,
+                                  #read_block_units = [2**(np.floor(np.log2(3*CLOUD_SIZE)) + 1)],
+                                  #process_block_steps=32)
+                                  read_block_units = [128], process_block_steps = 4)
 
     # Saver
     saver = tf.train.Saver()
@@ -40,6 +42,7 @@ def save_embeddings(device):
     os.mkdir("embeddings")
 
     config = tf.ConfigProto(allow_soft_placement=True)  # , log_device_placement=True)
+    config.gpu_options.allow_growth=True
     with tf.Session(config=config) as sess:
 
         # Run the initialization
@@ -48,13 +51,19 @@ def save_embeddings(device):
         # saver    
         saver.restore(sess, tf.train.latest_checkpoint('models_17'))
         
+#         variables_names = [v.name for v in tf.trainable_variables()]
+#         values = sess.run(variables_names)
+#         for k, v in zip(variables_names, values):
+#             print "Variable: ", k
+#             print "Shape: ", v.shape
+        
         # Do the training loop
         global_batch_idx = 1
         summary_skip_batch = 1
 
         # loop for all batches
         index = 1
-        for clouds, labels in data_gen.generate_representative_batch(train=True,
+        for clouds, labels in data_gen.generate_representative_batch(train=False,
                                                                      instances_number=1,
                                                                      shuffle_points=False,
                                                                      jitter_points=True,
