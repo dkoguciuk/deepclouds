@@ -478,7 +478,7 @@ class SyntheticData(GenericData):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
-            #clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
+            clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
                 global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
                 cloud_path = os.path.join(self.train_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
@@ -489,7 +489,7 @@ class SyntheticData(GenericData):
             clouds_new = np.copy(clouds)
             clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
-            #clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
+            clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
                 global_idx = instance_idx * self.CLASSES_COUNT + cloud_idx
                 cloud_path = os.path.join(self.test_dir_path, format(global_idx, '04d') + '_' + format(cloud_idx, '02d') + '.npy')
