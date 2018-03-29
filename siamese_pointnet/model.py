@@ -306,7 +306,7 @@ class RNNBidirectionalModel(GenericModel):
             normalize_embedding (bool): Should I normalize the embedding of a pointcloud to [0,1].
             pointcloud_size (int): Number of 3D points in the pointcloud.
         """
-        if mlp_layers_sizes[0] != 2*rnn_layers_sizes[-1]*pointcloud_size:
+        if mlp_layers_sizes[0] != 2 * rnn_layers_sizes[-1] * pointcloud_size:
             raise ValueError("first val of mlp_layers_sizes must match 2*rnn_last_value*pointcloud_size")
         
         # Save params
@@ -369,12 +369,12 @@ class RNNBidirectionalModel(GenericModel):
         # Define MLP params
         self.mlp_params = {}
         for layer_idx in range(1, len(self.mlp_layers_sizes)):
-            self.mlp_params['W' + str(layer_idx)] = tf.get_variable('W' + str(layer_idx), 
-                                                                [self.mlp_layers_sizes[layer_idx-1], self.mlp_layers_sizes[layer_idx]], 
-                                                                initializer = tf.contrib.layers.xavier_initializer(), )
+            self.mlp_params['W' + str(layer_idx)] = tf.get_variable('W' + str(layer_idx),
+                                                                [self.mlp_layers_sizes[layer_idx - 1], self.mlp_layers_sizes[layer_idx]],
+                                                                initializer=tf.contrib.layers.xavier_initializer(),)
             self.mlp_params["b" + str(layer_idx)] = tf.get_variable("b" + str(layer_idx),
                                                                 [self.mlp_layers_sizes[layer_idx]],
-                                                                initializer = tf.zeros_initializer())
+                                                                initializer=tf.zeros_initializer())
 
     def _calculate_embeddings(self, input):
         """
@@ -525,7 +525,7 @@ class RNNBidirectionalModel(GenericModel):
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
             return self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
-            #return self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+            # return self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
 
     def _define_optimizer(self, loss_function):
         """
@@ -549,7 +549,7 @@ class OrderMattersModel(GenericModel):
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self, train, 
+    def __init__(self, train,
                  batch_size, pointcloud_size,
                  read_block_units, process_block_steps,
                  normalize_embedding=True, verbose=True,
@@ -601,7 +601,7 @@ class OrderMattersModel(GenericModel):
         # Get hard triplets
         with tf.name_scope("get_embedding"):
             self.memory_vector_embdg = self._define_read_block(self.placeholder_embdg)
-            #self.memory_vector_embdg = tf.nn.l2_normalize(self.memory_vector_embdg, axis=-1, epsilon=1e-10)
+            # self.memory_vector_embdg = tf.nn.l2_normalize(self.memory_vector_embdg, axis=-1, epsilon=1e-10)
             with tf.name_scope("process_block"):
                 self.cloud_embedding_embdg = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
                 if self.normalize_embedding:
@@ -611,7 +611,7 @@ class OrderMattersModel(GenericModel):
         if self.train:
             with tf.name_scope("train"):
                 self.memory_vector_train = self._define_read_block(self.placeholder_train)
-                #self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
+                # self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
                 with tf.name_scope("process_block"):
                     self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
                     # normalize embedding
@@ -640,8 +640,8 @@ class OrderMattersModel(GenericModel):
         for layers in self.read_block_units:
 
             # Layer
-            #cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
-            #cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            # cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
+            # cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
             
             cell_fw = tf.contrib.rnn.LSTMCell(layers)
             cell_bw = tf.contrib.rnn.LSTMCell(layers)
@@ -657,8 +657,9 @@ class OrderMattersModel(GenericModel):
             self.read_block_states['bw'].append(state_bw)
 
         # Define process block params
-        self.process_block_cell = MyLSTMCell(num_units = self.read_block_units[-1]*4,
-                                             num_out = self.read_block_units[-1]*2)
+        self.process_block_cell = tf.nn.rnn_cell.LSTMCell(num_units=self.read_block_units[-1] * 2)
+#         self.process_block_cell = MyLSTMCell(num_units=self.read_block_units[-1] * 4,
+#                                              num_out=self.read_block_units[-1] * 2)
         self.process_block_state_start = self.process_block_cell.zero_state(self.batch_size, tf.float32)
 
         if self.verbose:
@@ -745,11 +746,14 @@ class OrderMattersModel(GenericModel):
             sys.stdout.write('.')
             sys.stdout.flush()
 
-        # Equation 3
-        _, (c, q) = tf.nn.static_rnn(cell = self.process_block_cell,
-                                     inputs = [tf.zeros([self.batch_size, 0])],
-                                     initial_state=process_block_state)
-
+        # tak
+        q = process_block_state[1]
+        
+#         # ATTENTION
+#         print "OK!"
+#         attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(num_units=q.shape[1], memory=M)
+#         exit()
+         
         # Equation 4
         m = tf.unstack(M, axis=0)
         q = tf.unstack(q, axis=0)
@@ -764,12 +768,12 @@ class OrderMattersModel(GenericModel):
         # Equation 6
         a_sum = tf.reduce_sum(a, axis=1, keepdims=True)
         r = tf.reduce_mean(M * tf.expand_dims(a, -1), axis=1) / a_sum
-
-        # Equation 7
-        state = tf.contrib.rnn.LSTMStateTuple(c, tf.concat([q, r], axis=1))
+        
+        # Equation 3 at the end:
+        _, state_star = tf.nn.static_rnn(cell=self.process_block_cell, inputs=[r], initial_state=process_block_state)
 
         # Return last hidden state
-        return state
+        return state_star
 
     def _define_process_block(self, input):
         """
