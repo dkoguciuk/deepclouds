@@ -72,7 +72,7 @@ class GenericModel(object):
         name = model_name + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
         return saver.save(session, os.path.join("models_feature_extractor", name)) 
 
-    def _tripplet_loss(self, embedding_a, embedding_p, embedding_n, margin):
+    def _triplet_loss(self, embedding_a, embedding_p, embedding_n):
         """
         Define tripplet loss tensor.
 
@@ -86,18 +86,17 @@ class GenericModel(object):
         """ 
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=1)
+                pos_dist = tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=-1)
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=1)
+                neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=-1)
             with tf.name_scope("copute_loss"):
-                print embedding_a.get_shape()
-                self.basic_loss = tf.maximum(margin + pos_dist - neg_dist, 0.0)
-                self.non_zero_triplets.append(tf.count_nonzero(self.basic_loss))
-                self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets[-1]))
+                self.basic_loss = tf.maximum(self.margin + pos_dist - neg_dist, 0.0)
+                self.non_zero_triplets = tf.count_nonzero(self.basic_loss)
+                self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets))
                 final_loss = tf.reduce_mean(self.basic_loss)
             return final_loss
         
-    def _tripplet_cosine_loss(self, embedding_a, embedding_p, embedding_n, margin):
+    def _triplet_cosine_loss(self, embedding_a, embedding_p, embedding_n):
         """
         Define tripplet loss tensor.
 
@@ -115,12 +114,19 @@ class GenericModel(object):
         """
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.losses.cosine_distance(embedding_a, embedding_p, axis=1)
+                e = tf.stack([embedding_a, embedding_p, embedding_n], axis=1)
+                pos_nom = tf.map_fn(lambda x: tf.reduce_sum(tf.multiply(x[0], x[1])), e, dtype=tf.float32)
+                pos_den = tf.multiply(tf.norm(embedding_a, axis=-1), tf.norm(embedding_p, axis=-1))
+                self.pos_dist = 1 - pos_nom / pos_den
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.losses.cosine_distance(embedding_a, embedding_n, axis=1)
+                neg_nom = tf.map_fn(lambda x: tf.reduce_sum(tf.multiply(x[0], x[2])), e, dtype=tf.float32)
+                neg_den = tf.multiply(tf.norm(embedding_a, axis=-1), tf.norm(embedding_n, axis=-1))
+                self.neg_dist = 1 - neg_nom / neg_den
             with tf.name_scope("copute_loss"):
-                basic_loss = tf.minimum(pos_dist - neg_dist - margin, 0.0)
-                final_loss = tf.reduce_mean(basic_loss)
+                self.basic_loss = tf.maximum(self.pos_dist + self.margin - self.neg_dist, 0.0)
+                self.non_zero_triplets = tf.count_nonzero(self.basic_loss)
+                self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets))
+                final_loss = tf.reduce_mean(self.basic_loss)
             return final_loss
 
     def _normalize_embedding(self, embedding):
@@ -132,7 +138,7 @@ class GenericModel(object):
         Returns:
             (tensor): Normalized embedding tensor of a pointcloud.
         """
-        return tf.nn.l2_normalize(embedding, dim=1, epsilon=1e-10, name='embeddings')
+        return tf.nn.l2_normalize(embedding, dim=-1, epsilon=1e-10, name='embeddings')
 
 class MLPModel(GenericModel):
     """
@@ -192,7 +198,7 @@ class MLPModel(GenericModel):
 
         # Define Loss function
         with tf.name_scope("batch_training"):
-            self.loss = self._tripplet_loss(self.embedding_a, self.embedding_p, self.embedding_n, margin, batch_size)
+            self.loss = self._triplet_loss(self.embedding_a, self.embedding_p, self.embedding_n, margin, batch_size)
             tf.summary.scalar("batch_cost", self.loss)
             self.optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss)
 
@@ -518,8 +524,8 @@ class RNNBidirectionalModel(GenericModel):
         """
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
-            return self._tripplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
-            #return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
+            return self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
+            #return self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin, self.batch_size)
 
     def _define_optimizer(self, loss_function):
         """
@@ -547,7 +553,8 @@ class OrderMattersModel(GenericModel):
                  batch_size, pointcloud_size,
                  read_block_units, process_block_steps,
                  normalize_embedding=True, verbose=True,
-                 learning_rate=0.0001, gradient_clip=10.0):
+                 learning_rate=0.0001, gradient_clip=10.0,
+                 distance='euclidian'):
         """
         Build a model.
         Args:
@@ -561,6 +568,7 @@ class OrderMattersModel(GenericModel):
             margin (float): Learning margin. 
             learning_rate (float): Learning rate of SGD.
             verbose (bool): Should we print additional info?
+            distance (str): Distance measure of two embeddings: euclidian or cosine.
         """
 
         # Save params
@@ -575,6 +583,7 @@ class OrderMattersModel(GenericModel):
         self.verbose = verbose
         self.non_zero_triplets = []
         self.summaries = []
+        self.distance = distance
 
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
@@ -596,7 +605,7 @@ class OrderMattersModel(GenericModel):
             with tf.name_scope("process_block"):
                 self.cloud_embedding_embdg = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
                 if self.normalize_embedding:
-                    self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=1, epsilon=1e-10)
+                    self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=-1, epsilon=1e-10)
 
         # Train procedure
         if self.train:
@@ -607,7 +616,7 @@ class OrderMattersModel(GenericModel):
                     self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
                     # normalize embedding
                     if self.normalize_embedding:
-                        self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=2, epsilon=1e-10)
+                        self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=-1, epsilon=1e-10)
                 with tf.name_scope("optimizer"):
                     self.loss = self._calculate_loss(self.cloud_embedding_train)
                     self.optimizer = self._define_optimizer(self.loss)
@@ -856,11 +865,16 @@ class OrderMattersModel(GenericModel):
 
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
-            #return self._tripplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
-            return self._tripplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.margin)
+            if self.distance == 'cosine':
+                ret = self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2])
+            elif self.distance == 'euclidian':
+                ret = self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2])
+            else:
+               raise ValueError("I don't know this embeddings distance..") 
 
         if self.verbose:
             print "OK!"
+        return ret
 
     def _define_optimizer(self, loss_function):
         """
