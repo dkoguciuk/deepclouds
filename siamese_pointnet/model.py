@@ -638,10 +638,6 @@ class OrderMattersModel(GenericModel):
         self.read_block_cells = { 'fw' : [], 'bw' : []}
         self.read_block_states = { 'fw' : [], 'bw' : []}
         for layers in self.read_block_units:
-
-            # Layer
-            #cell_fw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
-            #cell_bw = tf.contrib.rnn.LayerNormBasicLSTMCell(layers)
             
             cell_fw = tf.contrib.rnn.LSTMCell(layers)
             cell_bw = tf.contrib.rnn.LSTMCell(layers)
@@ -657,9 +653,12 @@ class OrderMattersModel(GenericModel):
             self.read_block_states['bw'].append(state_bw)
 
         # Define process block params
-        self.process_block_cell = MyLSTMCell(num_units = self.read_block_units[-1]*4,
-                                             num_out = self.read_block_units[-1]*2)
-        self.process_block_state_start = self.process_block_cell.zero_state(self.batch_size, tf.float32)
+        self.process_block_cells = []
+        self.process_block_state_starts = []
+        for layer_idx in range(len(self.process_block_steps)):
+            self.process_block_cells.append(MyLSTMCell(num_units = self.read_block_units[-1]*4,
+                                                       num_out = self.read_block_units[-1]*2, name = 'process_layer_' + str(layer_idx)))
+            self.process_block_state_starts.append(self.process_block_cells[-1].zero_state(self.batch_size, tf.float32))
 
         if self.verbose:
             print "OK!"
@@ -697,6 +696,7 @@ class OrderMattersModel(GenericModel):
                     print "OK!"
 
                 ret = tf.stack([out], axis=1)
+                
             elif len(inputs) == 3:
 
                 if self.verbose:
@@ -739,16 +739,16 @@ class OrderMattersModel(GenericModel):
             # return
             return ret
 
-    def _define_process_block_step(self, M, process_block_state):
+    def _define_process_block_step(self, process_block_cell, M, process_block_state):
 
         if self.verbose:
             sys.stdout.write('.')
             sys.stdout.flush()
 
         # Equation 3
-        _, (c, q) = tf.nn.static_rnn(cell = self.process_block_cell,
-                                     inputs = [tf.zeros([self.batch_size, 0])],
-                                     initial_state=process_block_state)
+        out, (c, q) = tf.nn.static_rnn(cell = process_block_cell,
+                                       inputs = [tf.zeros([self.batch_size, 0])],
+                                       initial_state=process_block_state)
 
         # Equation 4
         m = tf.unstack(M, axis=0)
@@ -769,7 +769,37 @@ class OrderMattersModel(GenericModel):
         state = tf.contrib.rnn.LSTMStateTuple(c, tf.concat([q, r], axis=1))
 
         # Return last hidden state
-        return state
+        return out, state
+
+    def _define_process_block_layer(self, layer_no, M, process_block_state):
+        
+        # Process block
+        outs = []
+        out, state = self._define_process_block_step(self.process_block_cells[layer_no], M, process_block_state)
+        outs.append(out)
+        
+        for _ in range(1, self.process_block_steps[layer_no]):
+            out, state = self._define_process_block_step(self.process_block_cells[layer_no], M, process_block_state)
+            outs.append(out)
+
+        return tf.squeeze(tf.stack(outs, axis=2), axis=0), state
+
+    def _define_process_block_inner(self, input):
+        
+        # first layer
+        states = []
+        out, state = self._define_process_block_layer(0, input, self.process_block_state_starts[0])
+        states.append(state)
+        
+        # all other layes
+        for layer_idx in range(1, len(self.process_block_steps)):
+            out, state = self._define_process_block_layer(layer_idx, out, self.process_block_state_starts[layer_idx])
+            states.append(state)
+
+        # Return
+        ret = tf.stack([state[1] for state in states], axis=1)
+        ret = tf.reshape(ret, (ret.shape[0], 1, -1))
+        return ret  
 
     def _define_process_block(self, input):
         """
@@ -797,16 +827,10 @@ class OrderMattersModel(GenericModel):
                     sys.stdout.write("Defining process block for embedding")
                     sys.stdout.flush()
 
-                # Process block
-                state = self._define_process_block_step(inputs[0], self.process_block_state_start)
-                for _ in range(1, self.process_block_steps):
-                    state = self._define_process_block_step(inputs[0], state)
+                ret = self._define_process_block_inner(inputs[0])
 
                 if self.verbose:
-                    print "OK!"
-
-                # Return 
-                ret = tf.stack([state[1]], axis=1)
+                    print "OK!"         
 
             elif len(inputs) == 3:
 
@@ -814,34 +838,25 @@ class OrderMattersModel(GenericModel):
                     sys.stdout.write("Defining process block for anchor")
                     sys.stdout.flush()
 
-                # Process block anchor
-                anchor_state = self._define_process_block_step(inputs[0], self.process_block_state_start)
-                for _ in range(1, self.process_block_steps):
-                    anchor_state = self._define_process_block_step(inputs[0], anchor_state)
+                anchor_ret = self._define_process_block_inner(inputs[0])
 
                 if self.verbose:
                     sys.stdout.write("OK!\nDefining process block for positive")
                     sys.stdout.flush()
 
-                # Process block positive
-                positive_state = self._define_process_block_step(inputs[1], self.process_block_state_start)
-                for _ in range(1, self.process_block_steps):
-                    positive_state = self._define_process_block_step(inputs[1], positive_state)
+                positive_ret = self._define_process_block_inner(inputs[1])
 
                 if self.verbose:
                     sys.stdout.write("OK!\nDefining process block for negative")
                     sys.stdout.flush()
 
-                # Process block negative
-                negative_state = self._define_process_block_step(inputs[2], self.process_block_state_start)
-                for _ in range(1, self.process_block_steps):
-                    negative_state = self._define_process_block_step(inputs[2], negative_state)
+                negative_ret = self._define_process_block_inner(inputs[2])
 
                 if self.verbose:
                     print "OK!"
 
-                # Return 
-                ret = tf.stack([anchor_state[1], positive_state[1], negative_state[1]], axis=1)
+                # Return
+                ret = tf.concat([anchor_ret, positive_ret, negative_ret], axis=1)
             else:
                 raise ValueError("I cannot handle this!")
 

@@ -20,6 +20,7 @@ from siamese_pointnet.model import RNNBidirectionalModel, MLPModel, OrderMatters
 
 CLOUD_SIZE = 32
 DISTANCE = 'cosine'
+LOAD_MODEL = False
 
 def plot_bar(e):
     bins = 64
@@ -84,9 +85,12 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
         with tf.device(device):
             model = OrderMattersModel(train=True,
                                       batch_size = batch_size, pointcloud_size = CLOUD_SIZE,
-                                      read_block_units = [256], process_block_steps=4,
+                                      read_block_units = [256, 256], process_block_steps=[4],
                                       learning_rate=learning_rate,
                                       gradient_clip=gradient_clip, distance=DISTANCE)
+
+    if LOAD_MODEL:
+        features_model_saver = tf.train.Saver()
 
     if batch_size % model.CLASSES_COUNT != 0:
         print "Batch size should be multiple of CLASSES_COUNT = ", model.CLASSES_COUNT
@@ -100,6 +104,9 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
         # Run the initialization
         sess.run(tf.global_variables_initializer())
         
+        if LOAD_MODEL:
+            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_180330'))
+        
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
 #         writer.add_graph(sess.graph)
@@ -112,6 +119,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
         hist_summary = tf.summary.merge(histograms)
  
         # Do the training loop
+        non_zeros = []
         global_batch_idx = 0
         summary_skip_batch = 10
         checkpoint_skip_epochs = 25
@@ -119,10 +127,9 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
  
             # loop for all batches
             epoch_batch_idx = 0
-            non_zeros = []
             for clouds, labels in data_gen.generate_representative_batch(train=True,
                                                                          instances_number=2,
-                                                                         shuffle_points=True,
+                                                                         shuffle_points=False,
                                                                          jitter_points=True,
                                                                          rotate_pointclouds=True):
 
@@ -250,15 +257,15 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
                     summary_test.value.add(tag="%snon_zero" % "", simple_value=non_zero)
                     writer.add_summary(summary_test, global_batch_idx)
                     writer.add_summary(summary_train, global_batch_idx)
-                    print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f non_zero: %03d" % (epoch + 1, epoch_batch_idx, loss, np.mean(neg_man)-np.mean(pos_man), non_zero)
+                    print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f non_zero: %03d margin: %03f" % (epoch + 1, epoch_batch_idx, loss, np.mean(neg_man)-np.mean(pos_man), non_zero, margin)
+
+#                     if margin_growth and len(non_zeros) > 10:
+#                         if np.mean(non_zeros[-2:]) < batch_size/16 :
+#                             margin = margin + 0.05
 
                 # inc
                 epoch_batch_idx += 1
                 global_batch_idx += 1
-
-#                     if margin_growth and len(model.non_zero_triplets) > 100:
-#                         if np.mean(model.non_zero_triplets[-100:]) < batch_size/2 :
-#                             margin = margin + 0.05
         
             if epoch % checkpoint_skip_epochs == checkpoint_skip_epochs - 1:
 
@@ -277,7 +284,7 @@ def main(argv):
     parser.add_argument("-g", "--gradient_clip", help="Max gradient value, gradient clipping disabled when smaller than zero", type=float, required=False, default=10.0)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")
     parser.add_argument("-m", "--margin", help="Triple loss margin value", type=float, required=False, default=0.2)
-    parser.add_argument("-t", "--margin_growth", help="Allow margin growth in time", type=bool, required=False, default=True)
+    parser.add_argument("-t", "--margin_growth", help="Allow margin growth in time", type=bool, required=False, default=False)
     args = vars(parser.parse_args())
 
     # train
