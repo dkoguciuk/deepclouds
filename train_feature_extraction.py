@@ -7,6 +7,7 @@
 
 import os
 import sys
+from tqdm import tqdm
 import shutil
 import argparse
 import numpy as np
@@ -18,9 +19,9 @@ import siamese_pointnet.modelnet_data as modelnet
 from siamese_pointnet.classifiers import MLPClassifier
 from siamese_pointnet.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
 
-CLOUD_SIZE = 32
+CLOUD_SIZE = 128
 DISTANCE = 'cosine'
-LOAD_MODEL = False
+LOAD_MODEL = True
 
 def plot_bar(e):
     bins = 64
@@ -66,7 +67,7 @@ def find_semi_hard_triples_to_train(embeddings, labels, margin):
     
     return hard_positives_indices, hard_negatives_indices, non_zero
 
-def train_synthetic_features_extraction(name, batch_size, epochs,
+def train_features_extraction(synthetic, name, batch_size, epochs,
                                         learning_rate = None, gradient_clip = None,
                                         margin=None, margin_growth=None, 
                                         device = None):
@@ -78,14 +79,17 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
     tf.reset_default_graph()
 
     # Generate data if needed
-    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    if synthetic:
+        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    else:
+        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
     # Define model
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             model = OrderMattersModel(train=True,
                                       batch_size = batch_size, pointcloud_size = CLOUD_SIZE,
-                                      read_block_units = [256, 256], process_block_steps=[4],
+                                      read_block_units = [512], process_block_steps=[4],
                                       learning_rate=learning_rate,
                                       gradient_clip=gradient_clip, distance=DISTANCE)
 
@@ -105,7 +109,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
         sess.run(tf.global_variables_initializer())
         
         if LOAD_MODEL:
-            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_180330'))
+            features_model_saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up'))
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
@@ -121,17 +125,18 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
         # Do the training loop
         non_zeros = []
         global_batch_idx = 0
-        summary_skip_batch = 10
-        checkpoint_skip_epochs = 25
+        summary_skip_batch = 20000
+        checkpoint_skip_epochs = 50
         for epoch in range(epochs):
  
             # loop for all batches
             epoch_batch_idx = 0
             for clouds, labels in data_gen.generate_representative_batch(train=True,
                                                                          instances_number=2,
-                                                                         shuffle_points=False,
+                                                                         shuffle_points=True,
                                                                          jitter_points=True,
-                                                                         rotate_pointclouds=True):
+                                                                         rotate_pointclouds=False,
+                                                                         rotate_pointclouds_up=True):
 
                 ##################################################################################################
                 ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
@@ -184,63 +189,14 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
                                                              feed_dict={model.placeholder_train: training_input,
                                                                         model.margin : [margin]})
  
-                non_zeros.append(non_zero)
- 
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
                 ##################################################################################################
  
                 if global_batch_idx % summary_skip_batch == summary_skip_batch - 1:
- 
-                    # Get test embeddings
-                    test_embeddings = { k : [] for k in range(40)}
-                    for clouds, labels in data_gen.generate_random_batch(False, 80):# 400 test examples / 80 clouds = 5 batches
-      
-                        # count embeddings
-                        test_embedding_input = np.stack([clouds], axis=1)
-                        test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input})
-      
-                        # add embeddings
-                        for cloud_idx in range(labels.shape[0]):
-                            test_embeddings[labels[cloud_idx]].append(test_embedding[cloud_idx].tolist())
-     
-                    # Convert to numpy
-                    class_embeddings = []
-                    for k in range(40):
-                        class_embeddings.append(test_embeddings[k])
-                    class_embeddings = np.stack(class_embeddings, axis=0)
-     
-                    # Calc distances between every embedding in one class 
-                    pos_man = []
-                    for class_idx in range(class_embeddings.shape[0]):
-                        positive_dist_class = []
-                        for instance_idx_1 in range(class_embeddings.shape[1]):
-                            for instance_idx_2 in range(class_embeddings.shape[1]):
-                                if instance_idx_1 != instance_idx_2:
-                                    if DISTANCE == 'euclidian':
-                                        positive_dist_class.append(np.linalg.norm(class_embeddings[class_idx][instance_idx_1] -
-                                                                                  class_embeddings[class_idx][instance_idx_2]))
-                                    elif DISTANCE == 'cosine':
-                                        positive_dist_class.append(cos_dist.cosine(class_embeddings[class_idx][instance_idx_1],
-                                                                                   class_embeddings[class_idx][instance_idx_2]))
-                        pos_man.append(positive_dist_class)
-     
-                    # Calc distances between every embedding in one class and every other class
-                    neg_man = []
-                    for class_idx_1 in range(class_embeddings.shape[0]):
-                        negative_dist_class = []
-                        for class_idx_2 in range(class_embeddings.shape[0]):
-                            if class_idx_1 != class_idx_2:
-                                for instance_idx_1 in range(class_embeddings.shape[1]):
-                                    for instance_idx_2 in range(class_embeddings.shape[1]):
-                                        if instance_idx_1 != instance_idx_2:
-                                            if DISTANCE == 'euclidian':
-                                                negative_dist_class.append(np.linalg.norm(class_embeddings[class_idx_1][instance_idx_1] -
-                                                                                          class_embeddings[class_idx_2][instance_idx_2]))
-                                            elif DISTANCE == 'cosine':
-                                                negative_dist_class.append(cos_dist.cosine(class_embeddings[class_idx_1][instance_idx_1],
-                                                                                           class_embeddings[class_idx_2][instance_idx_2]))
-                        neg_man.append(negative_dist_class)
+                    
+                    # pos/neg dist
+                    pos_man, neg_man = test_features_extraction(data_gen, model, sess)
                       
                     ##################################################################################################
                     ############################################# SUMMARIES ##########################################
@@ -252,16 +208,12 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
                       
                     # Add summary
                     summary_test = tf.Summary()
-                    summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=np.mean(neg_man)-np.mean(pos_man))
+                    summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man-pos_man)
                     summary_test.value.add(tag="%smargin" % "", simple_value=margin)
                     summary_test.value.add(tag="%snon_zero" % "", simple_value=non_zero)
                     writer.add_summary(summary_test, global_batch_idx)
                     writer.add_summary(summary_train, global_batch_idx)
-                    print "Epoch: %06d batch: %03d loss: %06f dist_diff: %06f non_zero: %03d margin: %03f" % (epoch + 1, epoch_batch_idx, loss, np.mean(neg_man)-np.mean(pos_man), non_zero, margin)
-
-#                     if margin_growth and len(non_zeros) > 10:
-#                         if np.mean(non_zeros[-2:]) < batch_size/16 :
-#                             margin = margin + 0.05
+                    print "Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, epoch_batch_idx, loss, neg_man-pos_man, non_zero, margin, learning_rate)
 
                 # inc
                 epoch_batch_idx += 1
@@ -272,6 +224,65 @@ def train_synthetic_features_extraction(name, batch_size, epochs,
                 # Save model
                 save_path = model.save_model(sess, name)
                 print "Model saved in file: %s" % save_path
+
+def test_features_extraction(data_gen, model, sess):
+    """
+    Train siamese pointnet with synthetic data.
+    """
+
+    # Get test embeddings
+    test_embeddings = { k : [] for k in range(40)}
+    for clouds, labels in data_gen.generate_random_batch(False, 80):# 400 test examples / 80 clouds = 5 batches
+    
+        # count embeddings
+        test_embedding_input = np.stack([clouds], axis=1)
+        test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input})
+    
+        # add embeddings
+        for cloud_idx in range(labels.shape[0]):
+            test_embeddings[labels[cloud_idx]].append(test_embedding[cloud_idx].tolist())
+    
+    # Convert to numpy
+    class_embeddings = []
+    for k in range(40):
+        class_embeddings.append(test_embeddings[k])
+    #class_embeddings = np.stack(class_embeddings, axis=0)
+    
+    # Calc distances between every embedding in one class 
+    pos_man = []
+    for class_idx in range(len(class_embeddings)):
+        positive_dist_class = []
+        for instance_idx_1 in range(len(class_embeddings[class_idx])):
+            for instance_idx_2 in range(len(class_embeddings[class_idx])):
+                if instance_idx_1 != instance_idx_2:
+                    if DISTANCE == 'euclidian':
+                        positive_dist_class.append(np.linalg.norm(class_embeddings[class_idx][instance_idx_1] -
+                                                                  class_embeddings[class_idx][instance_idx_2]))
+                    elif DISTANCE == 'cosine':
+                        positive_dist_class.append(cos_dist.cosine(class_embeddings[class_idx][instance_idx_1],
+                                                                   class_embeddings[class_idx][instance_idx_2]))
+        pos_man.append(positive_dist_class)
+    pos_man_flat = [item for sublist in pos_man for item in sublist]
+    
+    # Calc distances between every embedding in one class and every other class
+    neg_man = []
+    for class_idx_1 in range(len(class_embeddings)):
+        negative_dist_class = []
+        for class_idx_2 in range(len(class_embeddings)):
+            if class_idx_1 != class_idx_2:
+                for instance_idx_1 in range(len(class_embeddings[class_idx_1])):
+                    for instance_idx_2 in range(len(class_embeddings[class_idx_2])):
+                        if instance_idx_1 != instance_idx_2:
+                            if DISTANCE == 'euclidian':
+                                negative_dist_class.append(np.linalg.norm(class_embeddings[class_idx_1][instance_idx_1] -
+                                                                          class_embeddings[class_idx_2][instance_idx_2]))
+                            elif DISTANCE == 'cosine':
+                                negative_dist_class.append(cos_dist.cosine(class_embeddings[class_idx_1][instance_idx_1],
+                                                                           class_embeddings[class_idx_2][instance_idx_2]))
+        neg_man.append(negative_dist_class)
+    neg_man_flat = [item for sublist in neg_man for item in sublist]
+    
+    return np.mean(pos_man_flat), np.mean(neg_man_flat)
 
 def main(argv):
 
@@ -288,9 +299,10 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-    train_synthetic_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                                        learning_rate=args["learning_rate"], gradient_clip=args["gradient_clip"],
-                                        margin=args["margin"], device=args["device"], margin_growth=args["margin_growth"])
+    train_features_extraction(False,
+                              args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+                              learning_rate=args["learning_rate"], gradient_clip=args["gradient_clip"],
+                              margin=args["margin"], device=args["device"], margin_growth=args["margin_growth"])
 
     # Print all settings at the end of learning
     print "Training params:"

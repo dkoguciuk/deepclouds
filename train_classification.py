@@ -17,12 +17,12 @@ import siamese_pointnet.modelnet_data as modelnet
 from siamese_pointnet.classifiers import MLPClassifier
 from siamese_pointnet.model import OrderMattersModel
 
-CLOUD_SIZE = 32
+CLOUD_SIZE = 128
 CLASSIFIER_MODEL_LOAD = False
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [1024, 512, 256, 128, 40]):
+                         classifier_layers = [2048, 1024, 512, 256, 128, 40]):
     """
     Train siamese pointnet classificator with synthetic data.
     """
@@ -73,7 +73,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         ##############################################################################################
 
         sess.run(tf.global_variables_initializer())
-        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_17'))
+        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_180330'))
         if CLASSIFIER_MODEL_LOAD:
             classifier_model_saver.restore(sess, tf.train.latest_checkpoint('models_classifier'))
 
@@ -103,7 +103,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                                                  batch_size = batch_size,
                                                                  shuffle_points=True,
                                                                  jitter_points=True,
-                                                                 rotate_pointclouds=False):
+                                                                 rotate_pointclouds=True,
+                                                                 rotate_pointclouds_up=False):
 
                 ##################################################################################################
                 ######################################### GET EMBEDDING ##########################################
@@ -128,6 +129,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 global_batch_idx += 1
                 #epoch_batch_idx += 1
                 
+                #print global_batch_idx, loss
+                
             ##################################################################################################
             ################################### CLASSIFICATION ACCURACY ######################################
             ##################################################################################################
@@ -138,34 +141,34 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             hit = 0.
             all = 0.
             for clouds, labels in data_gen.generate_random_batch(False, 16):# 400 test examples / 16 clouds = 25 batches
-            
+                
                 # padding
-                clouds_padding = np.zeros((batch_size - 16, 32, 3), dtype=np.float)
+                clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
                 clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
                 labels_padding = np.zeros((batch_size - 16), dtype=np.int)
                 labels_padded = np.concatenate((labels, labels_padding), axis=0)
-                
+                    
                 # count embeddings
                 embedding_input = np.stack([clouds_padded], axis=1)
                 embeddings = sess.run(features_model.get_embeddings(),
                                            feed_dict={features_model.placeholder_embdg: embedding_input})
-                
+                    
                 # One hot
                 labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
                 pred = sess.run(classifier_model.get_classification_prediction(),
                                 feed_dict={classifier_model.placeholder_embed: embeddings,
                                            classifier_model.placeholder_label: labels_padded_one_hot})
-                
+                    
                 # accuracy 
                 predictions = np.argmax(pred, axis=1)
                 predictions = predictions[:len(labels)]
                 hit = hit + sum(predictions == labels)
                 all = all + len(labels)
-            
+                
             ##################################################################################################
             ############################################# SUMMARIES ##########################################
             ##################################################################################################
-              
+                  
             summary_test = tf.Summary()
             summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value= (hit / all))
             writer.add_summary(summary_test, global_batch_idx)
@@ -190,7 +193,7 @@ def main(argv):
     parser.add_argument("-b", "--batch_size", help="The size of a batch", type=int, required=False, default=64)
     parser.add_argument("-e", "--epochs", help="Number of epochs of training", type=int, required=False, default=25)
     parser.add_argument("-l", "--learning_rate", help="Learning rate value", type=float, required=True)
-    parser.add_argument("-r", "--read_block_units", help="Read block units", type=int, required=False, default=256)
+    parser.add_argument("-r", "--read_block_units", help="Read block units", type=int, required=False, default=512)
     parser.add_argument("-p", "--process_block_steps", help="Process block steps", type=int, required=False, default=4)
     parser.add_argument("-d", "--device", help="Which device to use (i.e. /device:GPU:0)", type=str, required=False, default="/device:GPU:0")
     args = vars(parser.parse_args())
@@ -198,7 +201,7 @@ def main(argv):
     # train
     train_classification(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
                          learning_rate=args["learning_rate"], device=args["device"],
-                         read_block_units=[args["read_block_units"]], process_block_steps=args["process_block_steps"])
+                         read_block_units=[args["read_block_units"]], process_block_steps=[args["process_block_steps"]])
 
     # Print all settings at the end of learning
     print "Classification model:"

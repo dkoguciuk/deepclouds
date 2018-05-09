@@ -150,20 +150,46 @@ class GenericData(object):
         return pointcloud
 
     @staticmethod
-    def _rotate_batch(batch):
+    def _rotate_pointcloud_up(pointcloud):
+        """
+        Randomly rotate the point cloud to augument the dataset -- the rotation is performed
+        with random angle around up axis.
+    
+        Args:
+            pointcloud (np.ndarray of size [N, 3]): Pointcloud to be rotated.
+        Returns:
+            (np.ndarray of size [N, 3]): Rotated pointcloud data. 
+        """
+        # Rotation params
+        theta = np.random.uniform() * 2 * np.pi         # Get random rotation
+        cosval = np.cos(theta)                          # Cos of rot angle
+        sinval = np.sin(theta)                          # Sin of rot angle
+        rotation_matrix = np.array([[cosval, 0, sinval],    # rot matrix
+                                    [0, 1, 0],
+                                    [-sinval, 0, cosval]])
+        pointcloud = np.dot(pointcloud.reshape((-1, 3)), rotation_matrix)
+        return pointcloud
+
+    @staticmethod
+    def _rotate_batch(batch, random_axis=True):
         """
         Randomly rotate the point clouds to augument the dataset -- the rotation is performed
         with random angle around random axis, but this axis has to contain (0,0) point.
     
         Args:
             batch (np.ndarray of size [B, X, N, 3]): Batch data with point clouds.
+            random_axis (bool): If true rotation will be perform around random axis, if false
+                will be perfomed around up axis. 
         Returns:
             (np.ndarray of size [B, X, N, 3]): Rotated pointclouds data. 
         """
         shape = batch.shape
         batch = np.reshape(batch, [-1, shape[2], shape[3]])
         for cloud_idx in range(shape[0]*shape[1]):
-            batch[cloud_idx] = GenericData._rotate_pointcloud(batch[cloud_idx])
+            if random_axis:
+                batch[cloud_idx] = GenericData._rotate_pointcloud(batch[cloud_idx])
+            else:
+                batch[cloud_idx] = GenericData._rotate_pointcloud_up(batch[cloud_idx])
         return np.reshape(batch, shape)
 
 class ModelnetData(GenericData) : 
@@ -177,12 +203,11 @@ class ModelnetData(GenericData) :
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self):
+    def __init__(self, pointcloud_size):
         """
         Default constructor, where the check for modelnet files is performed and if there
         is no needed files, we would download them directly form the stanford website.
         """
-        raise NotImplemented("For a long time this class was not tested!")
         
         # super
         super(ModelnetData, self).__init__()
@@ -196,6 +221,7 @@ class ModelnetData(GenericData) :
         # internal vars
         self.train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
         self.test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
+        self.pointcloud_size = pointcloud_size
 
     def generate_random_tripples(self, batch_size,
                                  shuffle_files=False, shuffle_pointclouds=False,
@@ -226,6 +252,7 @@ class ModelnetData(GenericData) :
                 P - another random permutation of the same cloud
                 N - random permutation of cloud from another class
         """
+        raise NotImplemented("For a long time this class was not tested!")
 
         # shuffle train files
         train_file_idxs = np.arange(0, len(self.train_files))
@@ -270,99 +297,181 @@ class ModelnetData(GenericData) :
                 # yield
                 yield batch_data
 
-    def generate_representative_batch(self, batch_size=256,  # 6 identities per batch
-                                      shuffle_files=False, shuffle_pointclouds=False,
-                                      jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                      rotate_pointclouds_rand=False, reshape_flags=[]):
-        """ 
-        Generator returns 3 point clouds A (anchor), P (positive), N (negative).
+    def generate_representative_batch(self,
+                                      train,
+                                      instances_number=2,
+                                      shuffle_files=True,
+                                      shuffle_points=False,
+                                      jitter_points=False,
+                                      rotate_pointclouds=False,
+                                      rotate_pointclouds_up=False,
+                                      reshape_flags=[]):
+        """
+        Take pointclouds with at least instances_number of each class.
     
         Args:
-            batch_size (int): Size of a batch, please consider we assume every object should appear
-                at least once in the batch, so recommended batch size is 256 with 6 identities per batch.
-            shuffle_files (boolean): Should we shuffle train files?
-            shuffle_pointclouds (boolean): Should we shuffle pointclouds for each file?
-            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
-            rotate_pointclouds_up (boolean): Rotate pointclouds with random angle around up axis,
-                but this axis has to contain (0,0) point.
-            rotate_pointclouds_rand (boolean): Rotate pointclouds with random angle around
+            train (bool): Should we take pointclouds from train or test dataset?
+            instances_number (int): Size of a batch expressed in instances_number of each CLASSES_COUNT,
+                resulting in batch_size equals instances_number * CLASSES_COUNT. Please assume every
+                object should appear at least two times in the batch, so recommended batches_number is 2.
+            shuffle_points (boolean): Should we shuffle points in the pointclouds?
+            jitter_points (boolean): Randomly jitter points with gaussian noise.
+            rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
             reshape_flags (list of str): Output pointclouds are in the default shape of
-                [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
+                [B, 3 N, 3]. One can specify some reshape flags here:
                 flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
-                    would be [batch_size, N*3]
+                    would be [B, 3, N*3]
         Returns:
-            (list of np.ndarray, list of np.ndarray): list of representative batch with pointclouds and labels.
+            (np.ndarray of size [B, N, 3], np.ndarray of size [B, N]): Representative batch and it's labels.
         """
-
+        # Train or test dir?
+        if train:
+            pointcloud_files = self.train_files
+        else:
+            pointcloud_files = self.test_files
+        
         # shuffle train files
-        train_file_idxs = np.arange(0, len(self.train_files))
+        pointcloud_files_idxs = np.arange(0, len(pointcloud_files))
         if shuffle_files:
-            np.random.shuffle(train_file_idxs)
-
-        # iterate over all files
-        for idx in range(len(self.train_files)):
-            # load pointclouds
-            pointclouds, labels = ModelnetData._load_h5_file(self.train_files[train_file_idxs[idx]])
-            # shuffle pointclouds
-            if shuffle_pointclouds:
-                pointclouds, labels, _ = ModelnetData._shuffle_data_with_labels(pointclouds, labels)
-            # batch_size calc
-            indentities_per_batch = int(np.floor(batch_size / self.CLASSES_COUNT))
-            batch_count = int(math.floor(pointclouds.shape[0] / batch_size))
-            # classes_indices
-            classes_indices = {}
-            labels = np.squeeze(labels)
-            for idx in range(0, self.CLASSES_COUNT):
-                classes_indices[idx] = np.squeeze(np.argwhere(labels == idx))
-            # iterate over all batches
-            for _ in range(batch_count):
+            np.random.shuffle(pointcloud_files_idxs)
+ 
+         # iterate over all files
+        for idx in range(len(pointcloud_files)):
+            # load pointclouds from file
+            file_pointclouds, file_labels = ModelnetData._load_h5_file(pointcloud_files[pointcloud_files_idxs[idx]])
+            # shuffle pointclouds from file
+            if shuffle_files:
+                file_pointclouds, file_labels, _ = ModelnetData._shuffle_data_with_labels(file_pointclouds, file_labels)
+            file_labels = np.squeeze(file_labels)
+            # get sorted pointclouds along labels
+            pointclouds = { k : [] for k in range(self.CLASSES_COUNT)}
+            for cloud_idx in range(file_labels.shape[0]):
+                pointclouds[file_labels[cloud_idx]].append(file_pointclouds[cloud_idx])
                 
-                # batch_data
-                batch_pointclouds = []
+            # iterate over all batches in this file
+            for _ in range(int(math.floor(file_pointclouds.shape[0] / self.CLASSES_COUNT / instances_number))):
+                
+                batch_clouds = []
                 batch_labels = []
-                
-                # iterate over all classes
-                for label_idx in range(self.CLASSES_COUNT):
-                    
-                    # how many identities
-                    for i in range(0, indentities_per_batch):
-                        if len(classes_indices[label_idx]):
-                            cloud = pointclouds[classes_indices[label_idx][0]]
-                            label = labels[classes_indices[label_idx][0]]
-                            classes_indices[label_idx] = classes_indices[label_idx][1:]
-                        else:
-                            cloud_idxs = np.squeeze(np.argwhere(labels == label_idx))
-                            cloud_idx = np.random.randint(len(cloud_idxs))
-                            cloud = pointclouds[cloud_idxs[cloud_idx]]
-                            label = labels[cloud_idxs[cloud_idx]]
-                        batch_pointclouds.append(ModelnetData._shuffle_data(cloud),)
-                        batch_labels.append(label)
-                
-                # fill to power of two
-                for i in range(batch_size - len(batch_pointclouds)):
-                    cloud_idx = np.random.randint(len(labels))
-                    cloud = pointclouds[cloud_idx]
-                    label = labels[cloud_idx]
-                    batch_pointclouds.append(ModelnetData._shuffle_data(cloud))
-                    batch_labels.append(label) 
-                    
+                for instance_idx in range(instances_number):
+                    for class_idx in range(self.CLASSES_COUNT):
+                        cloud_class_idx = np.random.choice(np.arange(len(pointclouds[class_idx])), 1)[0]
+                        batch_clouds.append(pointclouds[class_idx][cloud_class_idx])
+                        batch_labels.append(class_idx)
+
                 # stack
-                batch_pointclouds = np.stack(batch_pointclouds, axis=0)
+                batch_clouds = np.stack(batch_clouds, axis=0)
+                batch_clouds = np.stack([batch_clouds], axis=1)
                 batch_labels = np.stack(batch_labels, axis=0)
 
+                # RESIZE
+                batch_clouds_resized = []
+                for cloud_idx in range(len(batch_clouds)):
+                    cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                    cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                    batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)
+                batch_clouds = np.stack([batch_clouds_resized], axis=1)
+
+                # shuffle points
+                if shuffle_points:
+                    batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
                 # jitter
-                if jitter_pointclouds:
-                    batch_pointclouds = ModelnetData._jitter_pointclouds(batch_pointclouds)
+                if jitter_points:
+                    batch_clouds = SyntheticData._jitter_batch(batch_clouds)
                 # rotate
-                if rotate_pointclouds_up:
-                    raise NotImplementedError
+                if rotate_pointclouds:
+                    batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+                elif rotate_pointclouds_up:
+                    batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
                 # reshape
                 if "flatten_pointclouds" in reshape_flags:
-                    batch_pointclouds = np.reshape(batch_pointclouds, [batch_size, -1])
-
+                    shape = batch_clouds.shape
+                    batch_clouds = np.reshape(batch_clouds, [shape[0], shape[1], -1])
+    
                 # yield
-                yield batch_pointclouds, batch_labels
+                yield np.squeeze(batch_clouds, axis=1), batch_labels
+
+    def generate_random_batch(self, train, batch_size=64, shuffle_files=False,
+                              shuffle_points=False, jitter_points=False,
+                              rotate_pointclouds=False, rotate_pointclouds_up=False,
+                              reshape_flags=[]):
+        """ 
+        Take random pointcloud, apply optional operations on each pointclouds and return 
+        batch of such pointclouds with labels.
+    
+        Args:
+            train (bool): Should we take pointclouds from train or test dataset?
+            batch_size (int): Batch size we would split the dataset into (numer of triplets
+                to be returned by the generator).
+            shuffle_files (boolean): Should we shuffle files with pointclouds?
+            shuffle_points (boolean): Should we shuffle points in the pointclouds?
+            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
+            rotate_pointclouds (boolean): Rotate pointclouds with random angle around
+                random axis, but this axis has to contain (0,0) point.
+            reshape_flags (list of str): Output pointclouds are in the default shape of
+                [B, N, 3]. One can specify some reshape flags here:
+                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
+                    would be [B, N*3]
+        Returns:
+            (np.ndarray of shape [B, N, 3]), where B: batch size, N: number of points in each
+                pointcloud, 3: number of dimensions of each pointcloud (x,y,z).
+        """
+        # Train or test dir?
+        if train:
+            pointcloud_files = self.train_files
+        else:
+            pointcloud_files = self.test_files
+        
+        # shuffle train files
+        pointcloud_files_idxs = np.arange(0, len(pointcloud_files))
+        if shuffle_files:
+            np.random.shuffle(pointcloud_files_idxs)
+
+        # iterate over all files
+        for idx in range(len(pointcloud_files)):
+            # load pointclouds from file
+            file_pointclouds, file_labels = ModelnetData._load_h5_file(pointcloud_files[pointcloud_files_idxs[idx]])
+            # shuffle pointclouds from file
+            if shuffle_files:
+                file_pointclouds, file_labels, _ = ModelnetData._shuffle_data_with_labels(file_pointclouds, file_labels)
+            # iterate over all batches in this file
+            for batch_idx in range(int(math.floor(file_pointclouds.shape[0] / batch_size))):
+                
+                # Get pointclouds and labels
+                batch_clouds = file_pointclouds[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+                batch_clouds = np.stack([batch_clouds], axis=1)
+                batch_labels = file_labels[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+                batch_labels = np.squeeze(batch_labels)
+
+                # RESIZE
+                batch_clouds_resized = []
+                for cloud_idx in range(len(batch_clouds)):
+                    cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                    cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                    batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)
+                batch_clouds = np.stack([batch_clouds_resized], axis=1)
+
+                # shuffle points
+                if shuffle_points:
+                    batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
+                # jitter
+                if jitter_points:
+                    batch_clouds = SyntheticData._jitter_batch(batch_clouds)
+                # rotate
+                if rotate_pointclouds:
+                    batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+                elif rotate_pointclouds_up:
+                    batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
+                # reshape
+                if "flatten_pointclouds" in reshape_flags:
+                    shape = batch_clouds.shape
+                    batch_clouds = np.reshape(batch_clouds, [shape[0], shape[1], -1])
+    
+                # yield
+                yield np.squeeze(batch_clouds, axis=1), batch_labels
 
     @staticmethod
     def _get_filenames(filepath):
@@ -476,7 +585,8 @@ class SyntheticData(GenericData):
         print "Generating %d synthetic pointclouds, each with %d 3D points.." % (instances_per_class_train*self.CLASSES_COUNT, self.pointcloud_size)
         for instance_idx in range(0, instances_per_class_train):
             clouds_new = np.copy(clouds)
-            clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
+            clouds_new = self._rotate_batch(clouds_new, random_axis=False)                 # rotate along random axis and random angle
+            #clouds_new = self._rotate_batch(clouds_new, random_axis=True)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
             clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
@@ -487,7 +597,8 @@ class SyntheticData(GenericData):
         # Augment dataset and save (test)
         for instance_idx in range(0, instances_per_class_test):
             clouds_new = np.copy(clouds)
-            clouds_new = self._rotate_batch(clouds_new)                 # rotate along random axis and random angle
+            clouds_new = self._rotate_batch(clouds_new, random_axis=False)                 # rotate along random axis and random angle
+            #clouds_new = self._rotate_batch(clouds_new, random_axis=True)                 # rotate along random axis and random angle
             clouds_new = self._jitter_batch(clouds_new)                 # jitter points
             clouds_new = self._shuffle_points_in_batch(clouds_new)      # shuffle point in the pointcloud
             for cloud_idx in range(self.CLASSES_COUNT):                 # save pointclouds
@@ -577,6 +688,7 @@ class SyntheticData(GenericData):
                                       shuffle_points=False,
                                       jitter_points=False,
                                       rotate_pointclouds=False,
+                                      rotate_pointclouds_up=False,
                                       reshape_flags=[]):
         """
         Take pointclouds with at least instances_number of each class.
@@ -649,6 +761,8 @@ class SyntheticData(GenericData):
             # rotate
             if rotate_pointclouds:
                 batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+            elif rotate_pointclouds_up:
+                batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
             # reshape
             if "flatten_pointclouds" in reshape_flags:
                 shape = batch_clouds.shape
@@ -659,7 +773,8 @@ class SyntheticData(GenericData):
 
     def generate_random_batch(self, train, batch_size=64, shuffle_files=False,
                               shuffle_points=False, jitter_points=False,
-                              rotate_pointclouds=False, reshape_flags=[]):
+                              rotate_pointclouds=False, rotate_pointclouds_up=False,
+                              reshape_flags=[]):
         """ 
         Take random pointcloud, apply optional operations on each pointclouds and return 
         batch of such pointclouds with labels.
@@ -722,6 +837,8 @@ class SyntheticData(GenericData):
             # rotate
             if rotate_pointclouds:
                 batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+            if rotate_pointclouds_up:
+                batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
             # reshape
             if "flatten_pointclouds" in reshape_flags:
                 shape = batch_clouds.shape
