@@ -3,12 +3,12 @@ import sys
 import time
 import numpy as np
 import tensorflow as tf
-import siamese_pointnet.defines as df
-from siamese_pointnet.my_lstm_cell import MyLSTMCell
+import deepclouds.defines as df
+from deepclouds.my_lstm_cell import MyLSTMCell
 
 class GenericModel(object):
     """
-    A generic model of deep Siamese network for pointcloud classification.
+    A generic model of deepclouds network for pointcloud classification.
     """
     def __init__(self):
         """
@@ -142,7 +142,7 @@ class GenericModel(object):
 
 class MLPModel(GenericModel):
     """
-    A MLP based deep Siamese network for pointcloud classification.
+    A MLP based network for pointcloud classification.
     """
 
     MODEL_NAME = "MLP_basic"

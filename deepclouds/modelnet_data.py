@@ -3,7 +3,7 @@
 
 
 """
-This is the module of siamese_pointnet implementing all functionality
+This is the module of deepclouds implementing all functionality
 connected with the data manipulation (modelnet/synthetic). 
 """
 
@@ -23,8 +23,9 @@ import h5py
 import random
 import exceptions
 import numpy as np
+import downsample_uniform
 import numpy.core.umath_tests as nm
-import siamese_pointnet.defines as df
+import deepclouds.defines as df
 
 
 class GenericData(object):
@@ -368,9 +369,18 @@ class ModelnetData(GenericData) :
                 # RESIZE
                 batch_clouds_resized = []
                 for cloud_idx in range(len(batch_clouds)):
-                    cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                    cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                    batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+#                     cloud = downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0])
+#                     sum_x = float(np.sum(cloud[:,0], axis=1)) / cloud.shape[0]
+#                     sum_y = float(np.sum(cloud[:,1], axis=1)) / cloud.shape[0]
+#                     sum_z = float(np.sum(cloud[:,2], axis=1)) / cloud.shape[0]
+#                     print sum_x, sum_y, sum_z
+#                     exit()
+                    
+                    
+                    batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
+                    #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                    #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                    #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
                 batch_clouds = np.stack(batch_clouds_resized, axis=0)
                 batch_clouds = np.stack([batch_clouds_resized], axis=1)
 
@@ -448,11 +458,12 @@ class ModelnetData(GenericData) :
                 # RESIZE
                 batch_clouds_resized = []
                 for cloud_idx in range(len(batch_clouds)):
-                    cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                    cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                    batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                    batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
+                    #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                    #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                    #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
                 batch_clouds = np.stack(batch_clouds_resized, axis=0)
-                batch_clouds = np.stack([batch_clouds_resized], axis=1)
+                batch_clouds = np.stack([batch_clouds], axis=1)
 
                 # shuffle points
                 if shuffle_points:

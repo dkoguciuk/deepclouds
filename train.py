@@ -9,15 +9,15 @@ import os
 import sys
 import argparse
 import tensorflow as tf
-import siamese_pointnet.defines as df
-from siamese_pointnet.model import MLPModel, RNNBidirectionalModel
-import siamese_pointnet.modelnet_data as modelnet
+import deepclouds.defines as df
+from deepclouds.model import MLPModel, RNNBidirectionalModel
+import deepclouds.modelnet_data as modelnet
 
-def train_pointnet(name, batch_size, epochs, learning_rate, margin, device,
-                   layers_sizes=[2048, 512, 128],
-                   initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
+def train_deepclouds(name, batch_size, epochs, learning_rate, margin, device,
+                     layers_sizes=[2048, 512, 128],
+                     initialization_method="xavier", hidden_activation="relu", output_activation="relu"):
     """
-    Train siamese pointnet.
+    Train deepclouds.
     """
 
     # Reset
@@ -82,8 +82,8 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-    train_pointnet(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                   learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
+    train_deepclouds(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+                     learning_rate=args["learning_rate"], margin=args["margin"], device=args["device"])
 
     # Print all settings at the end of learning
     print "MLP-basic model:"

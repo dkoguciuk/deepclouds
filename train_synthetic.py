@@ -11,10 +11,10 @@ import shutil
 import argparse
 import numpy as np
 import tensorflow as tf
-import siamese_pointnet.defines as df
-import siamese_pointnet.modelnet_data as modelnet
-from siamese_pointnet.classifiers import MLPClassifier
-from siamese_pointnet.model import RNNBidirectionalModel, MLPModel
+import deepclouds.defines as df
+import deepclouds.modelnet_data as modelnet
+from deepclouds.classifiers import MLPClassifier
+from deepclouds.model import RNNBidirectionalModel, MLPModel
 
 CLOUD_SIZE = 32
 
@@ -72,7 +72,7 @@ def find_semi_hard_triples_to_train(embeddings, labels):
 def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate, margin, device,
                                         rnn_layer_sizes=[CLOUD_SIZE * 3, 40], mlp_layer_sizes=[2*40*CLOUD_SIZE, 40]):
     """
-    Train siamese pointnet with synthetic data.
+    Train deepclouds with synthetic data.
     """
 
     # Reset
@@ -140,7 +140,7 @@ def train_synthetic_features_extraction(name, batch_size, epochs, learning_rate,
 
 def train_synthetic_classification(name, batch_size, epochs, learning_rate, device):
     """
-    Train siamese pointnet classificator with synthetic data.
+    Train deepclouds classificator with synthetic data.
     """
 
     # Reset

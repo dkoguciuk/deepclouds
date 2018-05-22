@@ -12,26 +12,28 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import train_with_hparam
-import siamese_pointnet.defines as df
-import siamese_pointnet.modelnet_data as modelnet
-from siamese_pointnet.classifiers import MLPClassifier
-from siamese_pointnet.model import OrderMattersModel
+import deepclouds.defines as df
+import deepclouds.modelnet_data as modelnet
+from deepclouds.classifiers import MLPClassifier
+from deepclouds.model import OrderMattersModel
 
 CLOUD_SIZE = 128
 CLASSIFIER_MODEL_LOAD = False
+CLASSIFIER_MODEL_TRAIN = True
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
                          classifier_layers = [2048, 1024, 512, 256, 128, 40]):
     """
-    Train siamese pointnet classificator with synthetic data.
+    Train deepclouds classificator with synthetic data.
     """
 
     # Reset
     tf.reset_default_graph()
 
     # Generate data if needed
-    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    #data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -73,7 +75,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         ##############################################################################################
 
         sess.run(tf.global_variables_initializer())
-        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_180330'))
+        features_model_saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up_modelnet'))
         if CLASSIFIER_MODEL_LOAD:
             classifier_model_saver.restore(sess, tf.train.latest_checkpoint('models_classifier'))
 
@@ -89,101 +91,145 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         ##################################### EPOCH TRAINING LOOP ####################################
         ##############################################################################################
         
-        global_batch_idx = 1
-        #summary_skip_batch = 10
-        checkpoint_skip_epochs = 25
-        for epoch in range(epochs):
-
-            ##########################################################################################
-            ##################################### BATCH TRAINING LOOP ################################
-            ##########################################################################################
-
-            #epoch_batch_idx = 1
-            for clouds, labels in data_gen.generate_random_batch(train = True,
-                                                                 batch_size = batch_size,
-                                                                 shuffle_points=True,
-                                                                 jitter_points=True,
-                                                                 rotate_pointclouds=True,
-                                                                 rotate_pointclouds_up=False):
-
+        if CLASSIFIER_MODEL_TRAIN:
+        
+            global_batch_idx = 1
+            #summary_skip_batch = 10
+            checkpoint_skip_epochs = 25
+            accuracies = []
+            for epoch in range(epochs):
+    
+                ##########################################################################################
+                ##################################### BATCH TRAINING LOOP ################################
+                ##########################################################################################
+    
+                #epoch_batch_idx = 1
+                for clouds, labels in data_gen.generate_random_batch(train = True,
+                                                                     batch_size = batch_size,
+                                                                     shuffle_points=True,
+                                                                     jitter_points=True,
+                                                                     rotate_pointclouds=False,
+                                                                     rotate_pointclouds_up=True):
+    
+                    ##################################################################################################
+                    ######################################### GET EMBEDDING ##########################################
+                    ##################################################################################################
+    
+                    # count embeddings
+                    embedding_input = np.stack([clouds], axis=1)
+                    embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
+    
+                    ##################################################################################################
+                    ############################################# TRAIN ##############################################
+                    ##################################################################################################
+    
+                    # run optimizer
+                    new_labels = sess.run(tf.one_hot(labels, 40))
+                    _, loss, summary_train = sess.run([classifier_model.get_optimizer(),
+                                                       classifier_model.get_loss_function(),
+                                                       classifier_model.get_summary()],
+                                                       feed_dict={classifier_model.placeholder_embed: embeddings,
+                                                                  classifier_model.placeholder_label: new_labels})
+     
+                    global_batch_idx += 1
+                    #epoch_batch_idx += 1
+                    
+                    #print global_batch_idx, loss
+                    
                 ##################################################################################################
-                ######################################### GET EMBEDDING ##########################################
+                ################################### CLASSIFICATION ACCURACY ######################################
                 ##################################################################################################
-
-                # count embeddings
-                embedding_input = np.stack([clouds], axis=1)
-                embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
-
-                ##################################################################################################
-                ############################################# TRAIN ##############################################
-                ##################################################################################################
-
-                # run optimizer
-                new_labels = sess.run(tf.one_hot(labels, 40))
-                _, loss, summary_train = sess.run([classifier_model.get_optimizer(),
-                                                   classifier_model.get_loss_function(),
-                                                   classifier_model.get_summary()],
-                                                   feed_dict={classifier_model.placeholder_embed: embeddings,
-                                                              classifier_model.placeholder_label: new_labels})
- 
-                global_batch_idx += 1
-                #epoch_batch_idx += 1
                 
-                #print global_batch_idx, loss
+                #if global_batch_idx % summary_skip_batch == 0:
+                    
+                # Get test embeddings
+                hit = 0.
+                all = 0.
+                for clouds, labels in data_gen.generate_random_batch(False, 16):# 400 test examples / 16 clouds = 25 batches
+                    
+                    # padding
+                    clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
+                    clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
+                    labels_padding = np.zeros((batch_size - 16), dtype=np.int)
+                    labels_padded = np.concatenate((labels, labels_padding), axis=0)
+                        
+                    # count embeddings
+                    embedding_input = np.stack([clouds_padded], axis=1)
+                    embeddings = sess.run(features_model.get_embeddings(),
+                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                        
+                    # One hot
+                    labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
+                    pred = sess.run(classifier_model.get_classification_prediction(),
+                                    feed_dict={classifier_model.placeholder_embed: embeddings,
+                                               classifier_model.placeholder_label: labels_padded_one_hot})
+                        
+                    # accuracy 
+                    predictions = np.argmax(pred, axis=1)
+                    predictions = predictions[:len(labels)]
+                    hit = hit + sum(predictions == labels)
+                    all = all + len(labels)
+                    
+                ##################################################################################################
+                ############################################# SUMMARIES ##########################################
+                ##################################################################################################
                 
-            ##################################################################################################
-            ################################### CLASSIFICATION ACCURACY ######################################
-            ##################################################################################################
+                accuracies.append(hit / all)
+                summary_test = tf.Summary()
+                summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value= (hit / all))
+                writer.add_summary(summary_test, global_batch_idx)
+                writer.add_summary(summary_train, global_batch_idx)
+                print "Epoch: %06d batch: %03d loss: %06f test_accuracy: %06f" % (epoch + 1, global_batch_idx, loss, (hit / all))
+    
+                ##################################################################################################
+                ################################## SAVE CLASSIFICATION MODEL #####################################
+                ##################################################################################################
+    
+                if (epoch+1) % checkpoint_skip_epochs == 0:
+    
+                    # Save model
+                    save_path = classifier_model.save_model(sess, name)
+                    print "Model saved in file: %s" % save_path
+                    print "MAX ACC = ", np.max(accuracies) 
+
+        else:
+            accuracies = []
+            for _ in range(120):
+                # Get test embeddings
+                hit = 0.
+                all = 0.
+                for clouds, labels in data_gen.generate_random_batch(False, 16,
+                                                                     shuffle_points=False,
+                                                                     rotate_pointclouds_up=True):# 400 test examples / 16 clouds = 25 batches
+                    
+                    # padding
+                    clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
+                    clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
+                    labels_padding = np.zeros((batch_size - 16), dtype=np.int)
+                    labels_padded = np.concatenate((labels, labels_padding), axis=0)
+                        
+                    # count embeddings
+                    embedding_input = np.stack([clouds_padded], axis=1)
+                    embeddings = sess.run(features_model.get_embeddings(),
+                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                        
+                    # One hot
+                    labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
+                    pred = sess.run(classifier_model.get_classification_prediction(),
+                                    feed_dict={classifier_model.placeholder_embed: embeddings,
+                                               classifier_model.placeholder_label: labels_padded_one_hot})
+                        
+                    # accuracy 
+                    predictions = np.argmax(pred, axis=1)
+                    predictions = predictions[:len(labels)]
+                    hit = hit + sum(predictions == labels)
+                    all = all + len(labels)
             
-            #if global_batch_idx % summary_skip_batch == 0:
-                
-            # Get test embeddings
-            hit = 0.
-            all = 0.
-            for clouds, labels in data_gen.generate_random_batch(False, 16):# 400 test examples / 16 clouds = 25 batches
-                
-                # padding
-                clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
-                clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
-                labels_padding = np.zeros((batch_size - 16), dtype=np.int)
-                labels_padded = np.concatenate((labels, labels_padding), axis=0)
-                    
-                # count embeddings
-                embedding_input = np.stack([clouds_padded], axis=1)
-                embeddings = sess.run(features_model.get_embeddings(),
-                                           feed_dict={features_model.placeholder_embdg: embedding_input})
-                    
-                # One hot
-                labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
-                pred = sess.run(classifier_model.get_classification_prediction(),
-                                feed_dict={classifier_model.placeholder_embed: embeddings,
-                                           classifier_model.placeholder_label: labels_padded_one_hot})
-                    
-                # accuracy 
-                predictions = np.argmax(pred, axis=1)
-                predictions = predictions[:len(labels)]
-                hit = hit + sum(predictions == labels)
-                all = all + len(labels)
-                
-            ##################################################################################################
-            ############################################# SUMMARIES ##########################################
-            ##################################################################################################
-                  
-            summary_test = tf.Summary()
-            summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value= (hit / all))
-            writer.add_summary(summary_test, global_batch_idx)
-            writer.add_summary(summary_train, global_batch_idx)
-            print "Epoch: %06d batch: %03d loss: %06f test_accuracy: %06f" % (epoch + 1, global_batch_idx, loss, (hit / all))
-
-            ##################################################################################################
-            ################################## SAVE CLASSIFICATION MODEL #####################################
-            ##################################################################################################
-
-            if (epoch+1) % checkpoint_skip_epochs == 0:
-
-                # Save model
-                save_path = classifier_model.save_model(sess, name)
-                print "Model saved in file: %s" % save_path
+                print "Accuracy: ", hit/all        
+                accuracies.append(hit / all)
+            print "AVG ACCURACY = ", np.mean(accuracies)
+            
+            
 
 def main(argv):
 

@@ -11,10 +11,10 @@ import shutil
 import argparse
 import numpy as np
 import tensorflow as tf
-import siamese_pointnet.defines as df
-import siamese_pointnet.modelnet_data as modelnet
-from siamese_pointnet.classifiers import MLPClassifier
-from siamese_pointnet.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
+import deepclouds.defines as df
+import deepclouds.modelnet_data as modelnet
+from deepclouds.classifiers import MLPClassifier
+from deepclouds.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
 
 CLOUD_SIZE = 32
 

@@ -3,12 +3,12 @@
 
 
 """
-This is the module of siamese_pointnet introducing all const defines
+This is the module of deepclouds introducing all const defines
 used in the package.
 """
 
 
-__author__ = "Daniel Koguciuk and Rafał Koguciuk"
+__author__ = "Daniel Koguciuk"
 __license__ = "MIT"
 __version__ = "1.0.0"
 __maintainer__ = "Daniel Koguciuk"
@@ -21,7 +21,7 @@ import os
 
 ROOT_DIR = os.path.split(os.path.split(os.path.abspath(__file__))[0])[0]
 """
-The root directory of the siamiese_pointnet package.
+The root directory of the deepclouds package.
 """
 
 DATA_DIR = os.path.join(ROOT_DIR, "data")

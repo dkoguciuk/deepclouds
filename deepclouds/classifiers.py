@@ -2,7 +2,7 @@ import os
 import time
 import numpy as np
 import tensorflow as tf
-import siamese_pointnet.model as md
+import deepclouds.model as md
 
 class MLPClassifier(md.GenericModel):
 
