@@ -367,22 +367,22 @@ class ModelnetData(GenericData) :
                 batch_labels = np.stack(batch_labels, axis=0)
 
                 # RESIZE
-                batch_clouds_resized = []
-                for cloud_idx in range(len(batch_clouds)):
-#                     cloud = downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0])
-#                     sum_x = float(np.sum(cloud[:,0], axis=1)) / cloud.shape[0]
-#                     sum_y = float(np.sum(cloud[:,1], axis=1)) / cloud.shape[0]
-#                     sum_z = float(np.sum(cloud[:,2], axis=1)) / cloud.shape[0]
-#                     print sum_x, sum_y, sum_z
-#                     exit()
-                    
-                    
-                    batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
-                    #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                    #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                    #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                batch_clouds = np.stack(batch_clouds_resized, axis=0)
-                batch_clouds = np.stack([batch_clouds_resized], axis=1)
+                if self.pointcloud_size < 2048:
+                    batch_clouds_resized = []
+                    for cloud_idx in range(len(batch_clouds)):
+    #                     cloud = downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0])
+    #                     sum_x = float(np.sum(cloud[:,0], axis=1)) / cloud.shape[0]
+    #                     sum_y = float(np.sum(cloud[:,1], axis=1)) / cloud.shape[0]
+    #                     sum_z = float(np.sum(cloud[:,2], axis=1)) / cloud.shape[0]
+    #                     print sum_x, sum_y, sum_z
+    #                     exit()
+                        
+                        batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
+                        #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                        #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                        #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                    batch_clouds = np.stack(batch_clouds_resized, axis=0)
+                    batch_clouds = np.stack([batch_clouds_resized], axis=1)
 
                 # shuffle points
                 if shuffle_points:
@@ -456,14 +456,15 @@ class ModelnetData(GenericData) :
                 batch_labels = np.squeeze(batch_labels)
 
                 # RESIZE
-                batch_clouds_resized = []
-                for cloud_idx in range(len(batch_clouds)):
-                    batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
-                    #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                    #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                    #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                batch_clouds = np.stack(batch_clouds_resized, axis=0)
-                batch_clouds = np.stack([batch_clouds], axis=1)
+                if self.pointcloud_size < 2048:
+                    batch_clouds_resized = []
+                    for cloud_idx in range(len(batch_clouds)):
+                        batch_clouds_resized.append(downsample_uniform.downsample_uniform(batch_clouds[cloud_idx][0]))
+                        #cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                        #cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                        #batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                    batch_clouds = np.stack(batch_clouds_resized, axis=0)
+                    batch_clouds = np.stack([batch_clouds], axis=1)
 
                 # shuffle points
                 if shuffle_points:
