@@ -60,10 +60,10 @@ class CMakeBuild(build_ext):
 
 setup(
     name='pointcloud_downsample',
-    version='0.0.1',
+    version='0.0.2',
     author='Daniel Koguciuk',
     author_email='daniel.koguciuk@gmail.com',
-    description='A test project using pybind11 and CMake',
+    description='point cloud downsampling library for deepcloud project',
     long_description='',
     ext_modules=[CMakeExtension('pointcloud_downsample')],
     cmdclass=dict(build_ext=CMakeBuild),

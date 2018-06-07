@@ -17,13 +17,16 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import OrderMattersModel
 
+SAMPLES = 5
 CLOUD_SIZE = 128
-CLASSIFIER_MODEL_LOAD = True
-CLASSIFIER_MODEL_TRAIN = False
+SAMPLING_METHOD = 'via_graphs'
+CLASSIFIER_MODEL_LOAD = False
+CLASSIFIER_MODEL_TRAIN = True
 
-def train_classification(name, batch_size, epochs, learning_rate, device,
-                         read_block_units, process_block_steps,
-                         classifier_layers = [2048, 1024, 512, 256, 128, 40]):
+def train_classification_stacked(name, batch_size, epochs, learning_rate, device,
+                                 read_block_units, process_block_steps,
+                                 classifier_layers = [2048, 1024, 512, 256, 128, 40]):
+                                 #classifier_layers = [10240, 2560, 640, 160, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -68,7 +71,6 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth=True
     with tf.Session(config=config) as sess:
-#     with tf.Session() as sess:
 
         ##############################################################################################
         ######################################## INIT VARIABLES ######################################
@@ -104,20 +106,31 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 ##########################################################################################
     
                 #epoch_batch_idx = 1
-                for clouds, labels in data_gen.generate_random_batch(train = True,
-                                                                     batch_size = batch_size,
-                                                                     shuffle_points=True,
-                                                                     jitter_points=True,
-                                                                     rotate_pointclouds=False,
-                                                                     rotate_pointclouds_up=True):
+                sys.stdout.write('Training epoch ' + str(epoch) + " ")
+                for clouds, labels in data_gen.generate_random_batch_multiple_clouds(train = True,
+                                                                                     batch_size = batch_size,
+                                                                                     shuffle_points=True,
+                                                                                     jitter_points=True,
+                                                                                     rotate_pointclouds=False,
+                                                                                     rotate_pointclouds_up=True,
+                                                                                     samples = SAMPLES):
+    
+                    sys.stdout.write('.')
+                    sys.stdout.flush()
     
                     ##################################################################################################
                     ######################################### GET EMBEDDING ##########################################
                     ##################################################################################################
-    
+
                     # count embeddings
-                    embedding_input = np.stack([clouds], axis=1)
-                    embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
+                    embeddings = []
+                    for sample_idx in range(SAMPLES):
+                         embedding_input = np.stack([clouds[:,sample_idx]], axis=1)
+                         embeddings_sample = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
+                         embeddings.append(embeddings_sample)
+                    embeddings = np.stack(embeddings, axis=1)
+                    #embeddings = np.reshape(embeddings, (embeddings.shape[0], -1))
+                    embeddings = np.mean(embeddings, axis=1)
     
                     ##################################################################################################
                     ############################################# TRAIN ##############################################
@@ -136,27 +149,41 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     
                     #print global_batch_idx, loss
                     
-                ##################################################################################################
-                ################################### CLASSIFICATION ACCURACY ######################################
-                ##################################################################################################
+            ##################################################################################################
+            ################################### CLASSIFICATION ACCURACY ######################################
+            ##################################################################################################
+            
+            #if global_batch_idx % summary_skip_batch == 0:
                 
-                #if global_batch_idx % summary_skip_batch == 0:
-                    
                 # Get test embeddings
                 hit = 0.
                 all = 0.
-                for clouds, labels in data_gen.generate_random_batch(False, 16):# 400 test examples / 16 clouds = 25 batches
+                print("")
+                sys.stdout.write('Calculating test classification accuracy after epoch ' + str(epoch) + " ")
+                for clouds, labels in data_gen.generate_random_batch_multiple_clouds(False, 16):# 400 test examples / 16 clouds = 25 batches
                     
-                    # padding
-                    clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
-                    clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
-                    labels_padding = np.zeros((batch_size - 16), dtype=np.int)
-                    labels_padded = np.concatenate((labels, labels_padding), axis=0)
-                        
                     # count embeddings
-                    embedding_input = np.stack([clouds_padded], axis=1)
-                    embeddings = sess.run(features_model.get_embeddings(),
-                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                    sys.stdout.write('.')
+                    sys.stdout.flush()
+                    
+                    embeddings = []
+                    for sample_idx in range(SAMPLES):
+                        
+                        # padding
+                        clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
+                        clouds_padded = np.concatenate((clouds[:,sample_idx], clouds_padding), axis=0)
+                        labels_padding = np.zeros((batch_size - 16), dtype=np.int)
+                        labels_padded = np.concatenate((labels, labels_padding), axis=0)
+                            
+                        # count embeddings
+                        embedding_input = np.stack([clouds_padded], axis=1)
+                        embeddings_sample = sess.run(features_model.get_embeddings(),
+                                                   feed_dict={features_model.placeholder_embdg: embedding_input})
+                        embeddings.append(embeddings_sample)
+    
+                    embeddings = np.stack(embeddings, axis=1)
+                    embeddings = np.sum(embeddings, axis=1)
+                    #embeddings = np.reshape(embeddings, (embeddings.shape[0], -1))
                         
                     # One hot
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
@@ -179,6 +206,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value= (hit / all))
                 writer.add_summary(summary_test, global_batch_idx)
                 writer.add_summary(summary_train, global_batch_idx)
+                print("")
                 print "Epoch: %06d batch: %03d loss: %06f test_accuracy: %06f" % (epoch + 1, global_batch_idx, loss, (hit / all))
     
                 ##################################################################################################
@@ -186,7 +214,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 ##################################################################################################
     
                 if (epoch+1) % checkpoint_skip_epochs == 0:
-    
+     
                     # Save model
                     save_path = classifier_model.save_model(sess, name)
                     print "Model saved in file: %s" % save_path
@@ -207,16 +235,23 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                                                      shuffle_points=False,
                                                                      rotate_pointclouds_up=False):# 400 test examples / 16 clouds = 25 batches
                     
-                    # padding
-                    clouds_padding = np.zeros((batch_size - test_batch_size, CLOUD_SIZE, 3), dtype=np.float)
-                    clouds_padded = np.concatenate((clouds, clouds_padding), axis=0)
-                    labels_padding = np.zeros((batch_size - test_batch_size), dtype=np.int)
-                    labels_padded = np.concatenate((labels, labels_padding), axis=0)
-                        
                     # count embeddings
-                    embedding_input = np.stack([clouds_padded], axis=1)
-                    embeddings = sess.run(features_model.get_embeddings(),
-                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                    embeddings = []
+                    for sample_idx in range(SAMPLES):
+                    
+                        # padding
+                        clouds_padding = np.zeros((batch_size - test_batch_size, CLOUD_SIZE, 3), dtype=np.float)
+                        clouds_padded = np.concatenate((clouds[:,sample_idx], clouds_padding), axis=0)
+                        labels_padding = np.zeros((batch_size - test_batch_size), dtype=np.int)
+                        labels_padded = np.concatenate((labels, labels_padding), axis=0)
+                            
+                        # count embeddings
+                        embedding_input = np.stack([clouds_padded], axis=1)
+                        embeddings_sample = sess.run(features_model.get_embeddings(),
+                                                   feed_dict={features_model.placeholder_embdg: embedding_input})
+                        embeddings.append(embeddings_sample)
+                    embeddings = np.stack(embeddings, axis=1)
+                    embeddings = np.sum(embeddings, axis=1)
                         
                     # One hot
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
@@ -260,9 +295,9 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-    train_classification(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
-                         learning_rate=args["learning_rate"], device=args["device"],
-                         read_block_units=[args["read_block_units"]], process_block_steps=[args["process_block_steps"]])
+    train_classification_stacked(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+                                 learning_rate=args["learning_rate"], device=args["device"],
+                                 read_block_units=[args["read_block_units"]], process_block_steps=[args["process_block_steps"]])
 
     # Print all settings at the end of learning
     print "Classification model:"

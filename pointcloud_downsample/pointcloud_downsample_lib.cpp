@@ -78,3 +78,53 @@ std::vector<double> downsample_uniform(std::vector<double> input_cloud_raw, int 
     // Ret
     return output_cloud_raw;
 }
+
+std::vector<double> downsample_via_graphs(std::vector<double> input_cloud_raw, int output_cloud_size, int neighborhood_size)
+{
+    // asdasd
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr input_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+
+    // Prepare
+    input_cloud->width    = input_cloud_raw.size();
+    input_cloud->height   = 1;
+    input_cloud->is_dense = false;
+    input_cloud->points.resize (input_cloud->width * input_cloud->height);
+
+    // Fill
+    for (int i = 0; i < input_cloud->points.size()/3; ++i)
+    {
+        input_cloud->points[i].x = input_cloud_raw[i*3 + 0];
+        input_cloud->points[i].y = input_cloud_raw[i*3 + 1];
+        input_cloud->points[i].z = input_cloud_raw[i*3 + 2];
+    }
+
+    // Compute weights
+    float sigma_sq = 0.00005;
+    std::vector<float> importance_weights(input_cloud->points.size(), 0.0);
+    computeWeights(input_cloud, input_cloud->points.size(), sigma_sq, neighborhood_size, importance_weights);
+
+    // Resample based on weights
+    std::vector<int> samples_indices = weightedRandomSample(importance_weights, input_cloud->points.size(), output_cloud_size);
+
+    // Reconstruct sampled point cloud
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr output_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+    resamplePC(input_cloud, output_cloud, samples_indices, output_cloud_size);
+
+    // Convert to vector of points
+    std::vector<double> output_cloud_raw;
+    double dist_max = 0;
+    for (int i = 0; i<output_cloud->points.size(); ++i)
+    {
+        output_cloud_raw.push_back(output_cloud->points[i].x);
+        output_cloud_raw.push_back(output_cloud->points[i].y);
+        output_cloud_raw.push_back(output_cloud->points[i].z);
+
+        double dist = (output_cloud->points[i].x*output_cloud->points[i].x + output_cloud->points[i].y*output_cloud->points[i].y + output_cloud->points[i].z*output_cloud->points[i].z);
+        dist = sqrt(dist);
+        dist_max = std::max(dist, dist_max);
+    }
+    //std::cout << "MAX_DIST = " << dist_max << std::endl;
+
+    // Ret
+    return output_cloud_raw;
+}

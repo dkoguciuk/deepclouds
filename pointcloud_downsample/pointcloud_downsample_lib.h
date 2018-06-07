@@ -10,7 +10,12 @@
 #include <string>
 #include <iostream>
 #include <vector>
+#include <pcseg/cplusplus/include/sampling.h>
 
 const int SIZE = 128;
 std::vector<double> downsample_uniform(std::vector<double> input_cloud_raw, int output_cloud_size = 128,
                                        float leaf_size_start = 0.25, float leaf_size_step = 0.01);
+
+
+std::vector<double> downsample_via_graphs(std::vector<double> input_cloud_raw, int output_cloud_size = 128,
+                                          int neighborhood_size = 5);

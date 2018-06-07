@@ -2,21 +2,12 @@
 ##################### CMAKE RELATED ######################
 ##########################################################
 
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.5)
 project(pointcloud_downsample)
 
 ##########################################################
 ################## EXTERNAL LIBRARIES ####################
 ##########################################################
-
-# Find Boost
-find_package(Boost COMPONENTS program_options system filesystem python REQUIRED)
-if(Boost_FOUND)
-    message("-- Boost ${Boost_VERSION} was found")
-    include_directories(${Boost_INCLUDE_DIRS})
-else(BOOST_FOUND)
-    message(FATAL_ERROR "Boost was not found")
-endif(Boost_FOUND)
 
 # PCL
 find_package(PCL 1.7.1 REQUIRED)
@@ -37,6 +28,15 @@ if(NOT VTK_BINARY_DIR)
   endif(NOT VTK_DIR)
   include(${VTK_USE_FILE})
 endif(NOT VTK_BINARY_DIR)
+
+# Find Boost
+find_package(Boost COMPONENTS system filesystem python program_options REQUIRED)
+if(Boost_FOUND)
+    message("-- Boost ${Boost_VERSION} was found")
+    include_directories(${Boost_INCLUDE_DIRS})
+else(BOOST_FOUND)
+    message(FATAL_ERROR "Boost was not found")
+endif(Boost_FOUND)
 
 ##########################################################
 ######################## C++11 ###########################
@@ -66,7 +66,8 @@ include_directories(${PROJECT_SOURCE_DIR})
 ############## SIAMESEPOINTNET C++ MODULE ################
 ##########################################################
 
-add_library(${PROJECT_NAME}_lib SHARED ${PROJECT_NAME}_lib.cpp ${PROJECT_NAME}_lib.h)
+add_library(${PROJECT_NAME}_lib SHARED ${PROJECT_NAME}_lib.cpp ${PROJECT_NAME}_lib.h
+            ${PROJECT_SOURCE_DIR}/pcseg/cplusplus/src/sampling.cpp)
 target_link_libraries(${PROJECT_NAME}_lib ${PCL_LIBRARIES} ${VTK_LIBRARIES})
 
 ##########################################################
@@ -74,10 +75,10 @@ target_link_libraries(${PROJECT_NAME}_lib ${PCL_LIBRARIES} ${VTK_LIBRARIES})
 ##########################################################
 
 pybind11_add_module(${PROJECT_NAME} ${PROJECT_NAME}_py.cpp)
-target_link_libraries(${PROJECT_NAME} ${PROJECT_NAME}_lib)
+target_link_libraries(${PROJECT_NAME} PUBLIC ${PROJECT_NAME}_lib)
 
 add_executable(${PROJECT_NAME}_cpp ${PROJECT_NAME}_cpp.cpp)
-target_link_libraries(${PROJECT_NAME}_cpp ${PROJECT_NAME}_lib)
+target_link_libraries(${PROJECT_NAME}_cpp ${PROJECT_NAME}_lib ${Boost_LIBRARIES})
 
 ##########################################################
 ############## SIAMESEPOINTNET INSTALL ################

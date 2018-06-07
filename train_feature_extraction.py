@@ -23,6 +23,7 @@ from deepclouds.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
 
 CLOUD_SIZE = 128
 DISTANCE = 'cosine'
+SAMPLING_METHOD = 'via_graphs'
 LOAD_MODEL = True
 CALC_DIST = True
 SYNTHETIC = False
@@ -100,6 +101,23 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                       learning_rate=learning_rate,
                                       gradient_clip=gradient_clip, distance=DISTANCE)
 
+    # PRINT PARAM NO
+#    total_parameters = 0
+#    for variable in tf.trainable_variables():
+#        # shape is an array of tf.Dimension
+#        shape = variable.get_shape()
+#        print(variable.name)
+#        print(shape)
+#        print(len(shape))
+#        variable_parameters = 1
+#        for dim in shape:
+#            print(dim)
+#            variable_parameters *= dim.value
+#        print(variable_parameters)
+#        total_parameters += variable_parameters
+#    print(total_parameters)
+#    exit()
+
     if LOAD_MODEL:
         features_model_saver = tf.train.Saver()
 
@@ -145,7 +163,8 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                                                          shuffle_points=True,
                                                                          jitter_points=True,
                                                                          rotate_pointclouds=False,
-                                                                         rotate_pointclouds_up=ROTATE_CLOUDS_UP):
+                                                                         rotate_pointclouds_up=ROTATE_CLOUDS_UP,
+                                                                         sampling_method=SAMPLING_METHOD):
                 
                 #time_1 = timer()
 
@@ -270,7 +289,8 @@ def test_features_extraction(data_gen, model, sess, partial_score = True):
     # Get test embeddings
     batches = 0
     test_embeddings = { k : [] for k in range(40)}
-    for clouds, labels in data_gen.generate_random_batch(False, 80, shuffle_files=True):# 400 test examples / 80 clouds = 5 batches
+    for clouds, labels in data_gen.generate_random_batch(False, 80, shuffle_files=True,
+                                                         sampling_method=SAMPLING_METHOD):# 400 test examples / 80 clouds = 5 batches
 
         # count embeddings
         test_embedding_input = np.stack([clouds], axis=1)
