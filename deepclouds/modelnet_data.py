@@ -807,6 +807,7 @@ class SyntheticData(GenericData):
                                       jitter_points=False,
                                       rotate_pointclouds=False,
                                       rotate_pointclouds_up=False,
+                                      sampling_method=None,
                                       reshape_flags=[]):
         """
         Take pointclouds with at least instances_number of each class.
@@ -892,6 +893,7 @@ class SyntheticData(GenericData):
     def generate_random_batch(self, train, batch_size=64, shuffle_files=False,
                               shuffle_points=False, jitter_points=False,
                               rotate_pointclouds=False, rotate_pointclouds_up=False,
+                              sampling_method=None,
                               reshape_flags=[]):
         """ 
         Take random pointcloud, apply optional operations on each pointclouds and return 

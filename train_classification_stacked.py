@@ -113,7 +113,8 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                                                                                      jitter_points=True,
                                                                                      rotate_pointclouds=False,
                                                                                      rotate_pointclouds_up=True,
-                                                                                     samples = SAMPLES):
+                                                                                     samples = SAMPLES,
+                                                                                     sampling_method = SAMPLING_METHOD):
     
                     sys.stdout.write('.')
                     sys.stdout.flush()
@@ -160,7 +161,9 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                 all = 0.
                 print("")
                 sys.stdout.write('Calculating test classification accuracy after epoch ' + str(epoch) + " ")
-                for clouds, labels in data_gen.generate_random_batch_multiple_clouds(False, 16):# 400 test examples / 16 clouds = 25 batches
+                for clouds, labels in data_gen.generate_random_batch_multiple_clouds(False, 2,
+                                                                                     samples = SAMPLES,
+                                                                                     sampling_method = SAMPLING_METHOD):# 400 test examples / 16 clouds = 25 batches
                     
                     # count embeddings
                     sys.stdout.write('.')
@@ -170,9 +173,9 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                     for sample_idx in range(SAMPLES):
                         
                         # padding
-                        clouds_padding = np.zeros((batch_size - 16, CLOUD_SIZE, 3), dtype=np.float)
+                        clouds_padding = np.zeros((batch_size - 2, CLOUD_SIZE, 3), dtype=np.float)
                         clouds_padded = np.concatenate((clouds[:,sample_idx], clouds_padding), axis=0)
-                        labels_padding = np.zeros((batch_size - 16), dtype=np.int)
+                        labels_padding = np.zeros((batch_size - 2), dtype=np.int)
                         labels_padded = np.concatenate((labels, labels_padding), axis=0)
                             
                         # count embeddings
@@ -182,7 +185,7 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                         embeddings.append(embeddings_sample)
     
                     embeddings = np.stack(embeddings, axis=1)
-                    embeddings = np.sum(embeddings, axis=1)
+                    embeddings = np.mean(embeddings, axis=1)
                     #embeddings = np.reshape(embeddings, (embeddings.shape[0], -1))
                         
                     # One hot

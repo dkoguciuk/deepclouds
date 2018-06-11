@@ -4,3 +4,10 @@
 .settings
 data
 logs
+pointcloud_downsample/build
+pointcloud_downsample/dist
+*.user
+embeddings
+models
+analysis/*.npy
+models_feature_extractor

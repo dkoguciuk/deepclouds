@@ -21,12 +21,12 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
 
-CLOUD_SIZE = 128
+CLOUD_SIZE = 16
 DISTANCE = 'cosine'
 SAMPLING_METHOD = 'via_graphs'
-LOAD_MODEL = True
+LOAD_MODEL = False
 CALC_DIST = True
-SYNTHETIC = False
+SYNTHETIC = True
 READ_BLOCK_UNITS = [512]
 ROTATE_CLOUDS_UP = True
 checkpoint_skip_epochs = 50

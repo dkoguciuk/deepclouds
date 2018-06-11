@@ -1,15 +1,26 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+'''
+@author: Daniel Koguciuk <daniel.koguciuk@gmail.com>
+@note: Created on 01.06.2018
+'''
+import os
+import sys
 import pypcd
 import numpy as np
 import pointcloud_downsample
+
+# Import deepclouds
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 import deepclouds.modelnet_data as modelnet_data
 
 idx = 2
 
 # filepaths
-pcd_filepath_in = 'data/pcd/modelnet_orig.pcd'
-pcd_filepath_out_unif = 'data/pcd/modelnet_unif.pcd'
-pcd_filepath_out_rand = 'data/pcd/modelnet_rand.pcd'
-pcd_filepath_out_grph = 'data/pcd/modelnet_grph.pcd'
+pcd_filepath_in = '../data/pcd/modelnet_orig.pcd'
+pcd_filepath_out_unif = '../data/pcd/modelnet_unif.pcd'
+pcd_filepath_out_rand = '../data/pcd/modelnet_rand.pcd'
+pcd_filepath_out_grph = '../data/pcd/modelnet_grph.pcd'
 
 data_gen = modelnet_data.ModelnetData(2048)
 for X, Y in data_gen.generate_random_batch(True):

@@ -1,6 +1,6 @@
-[submodule "pointcloud_downsample/pybind11"]
-	path = pointcloud_downsample/pybind11
-	url = https://github.com/pybind/pybind11.git
-[submodule "pointcloud_downsample/pcseg"]
-	path = pointcloud_downsample/pcseg
+[submodule "downsampling/pointcloud_downsample/pcseg"]
+	path = downsampling/pointcloud_downsample/pcseg
 	url = https://github.com/dkoguciuk/pcseg.git
+[submodule "downsampling/pointcloud_downsample/pybind11"]
+	path = downsampling/pointcloud_downsample/pybind11
+	url = https://github.com/pybind/pybind11.git

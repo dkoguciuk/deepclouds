@@ -1,9 +1,16 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+'''
+@author: Daniel Koguciuk <daniel.koguciuk@gmail.com>
+@note: Created on 01.06.2018
+'''
+
 import pypcd
 import numpy as np
 
 # filepaths
-npy_filepath = '/home/daniel/eclipse-workspace/siamese_pointnet/data/synthetic/train/0001_01.npy'
-pcd_filepath = '/home/daniel/eclipse-workspace/siamese_pointnet/data/synthetic/train/pcd/0000_01.pcd'
+npy_filepath = '../data/synthetic/train/0001_01.npy'
+pcd_filepath = '../data/pcd/0000_01.pcd'
 
 # load
 a = np.load(npy_filepath)
