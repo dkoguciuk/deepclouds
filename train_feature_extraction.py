@@ -19,14 +19,15 @@ import scipy.spatial.distance as cos_dist
 from timeit import default_timer as timer
 import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
-from deepclouds.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
+from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 16
+
+CLOUD_SIZE = 128
 DISTANCE = 'cosine'
 SAMPLING_METHOD = 'via_graphs'
 LOAD_MODEL = False
 CALC_DIST = True
-SYNTHETIC = True
+SYNTHETIC = False
 READ_BLOCK_UNITS = [512]
 ROTATE_CLOUDS_UP = True
 checkpoint_skip_epochs = 50
@@ -61,13 +62,8 @@ def find_semi_hard_triples_to_train(embeddings, labels, margin):
         # Help vars
         other_indices = np.squeeze(np.argwhere(labels != class_idx))                                            # Find indices of all other class instances
         negatives_distances = np.take(distances, other_indices)                                                 # Find distances to all other class distances
-#        negatives_distances[negatives_distances <= positive_distance] = float('inf')                           # Ifinity distance when it's smaller than positive dist
-#        negative_idx = find_nearest_idx(negatives_distances, positive_distance + margin/10)                    # Find index of elem in the half of margin range
-        
-#        negatives_distances[negatives_distances <= (positive_distance + 1e-6)] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
         negatives_distances[negatives_distances <= positive_distance] = float('inf')                            # Ifinity distance when it's smaller than positive dist plus eps
         negative_idx = np.argmin(negatives_distances)                                                           # Smallest
-        
         hard_negatives_indices.append(other_indices[negative_idx])                                              # Find negative embedding index 
     
         if max(positive_distance + margin - negatives_distances[negative_idx], 0) > 0:
@@ -95,11 +91,16 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     # Define model
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
-            model = OrderMattersModel(train=True,
-                                      batch_size = batch_size, pointcloud_size = CLOUD_SIZE,
-                                      read_block_units = READ_BLOCK_UNITS, process_block_steps=[4],
-                                      learning_rate=learning_rate,
-                                      gradient_clip=gradient_clip, distance=DISTANCE)
+            model = DeepCloudsModel(train=True,
+                                    batch_size = batch_size, pointcloud_size = CLOUD_SIZE,
+                                    read_block_units = READ_BLOCK_UNITS, process_block_steps=[4],
+                                    learning_rate=learning_rate,
+                                    gradient_clip=gradient_clip, distance=DISTANCE,
+                                    #normalize_embedding=False,
+                                    normalize_embedding=True,
+                                    t_net=False,
+                                    read_block_method='pointnet')
+                                    #read_block_method='birnn')
 
     # PRINT PARAM NO
 #    total_parameters = 0
@@ -131,15 +132,15 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     with tf.Session(config=config) as sess:
  
         # Run the initialization
-        sess.run(tf.global_variables_initializer())
+        sess.run(tf.global_variables_initializer()) 
         
         if LOAD_MODEL:
             #features_model_saver.restore(sess, tf.train.latest_checkpoint('256_points_modelnet'))
-            features_model_saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up_modelnet'))
+            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
-#         writer.add_graph(sess.graph)
+        #writer.add_graph(sess.graph)
  
         histograms = []
         variables_names = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
@@ -150,7 +151,6 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
  
         # Do the training loop
         non_zeros = []
-        global_batch_idx = 0
         summary_skip_batch = 120 # one epoch on modelnet
         for epoch in range(epochs):
  
@@ -165,7 +165,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                                                          rotate_pointclouds=False,
                                                                          rotate_pointclouds_up=ROTATE_CLOUDS_UP,
                                                                          sampling_method=SAMPLING_METHOD):
-                
+
                 #time_1 = timer()
 
                 ##################################################################################################
@@ -175,9 +175,11 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 # count embeddings
                 embedding_input = np.stack([clouds], axis=1)
                 embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input,
-                                                                         model.margin : [margin]})
+                                                                         model.margin : [margin],
+                                                                         model.placeholder_is_tr : True}) 
                 
                 #time_2 = timer()
+                
                  
                 # Find hard examples to train on
                 pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
@@ -190,8 +192,6 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 training_input = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
                 
                 #time_3 = timer()
-
-                
 
                 ##################################################################################################
                 ############################################ VISUALIZATION #######################################
@@ -218,14 +218,14 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 ##################################################################################################
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
+
  
                 # run optimizer
-                _, loss, summary_train, non_zero = sess.run([model.get_optimizer(), model.get_loss_function(),
+                global_batch_idx, _, loss, summary_train, non_zero = sess.run([model.global_step, model.get_optimizer(), model.get_loss_function(),
                                                              model.get_summary(), model.non_zero_triplets],
                                                              feed_dict={model.placeholder_train: training_input,
-                                                                        model.margin : [margin]})
-                
-                #time_4 = timer()
+                                                                        model.margin : [margin],
+                                                                        model.placeholder_is_tr : True})
  
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
@@ -271,7 +271,6 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
 
                 # inc
                 epoch_batch_idx += 1
-                global_batch_idx += 1
         
             if epoch % checkpoint_skip_epochs == checkpoint_skip_epochs - 1:
 
@@ -294,7 +293,8 @@ def test_features_extraction(data_gen, model, sess, partial_score = True):
 
         # count embeddings
         test_embedding_input = np.stack([clouds], axis=1)
-        test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input})
+        test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input,
+                                                                     model.placeholder_is_tr : False})
     
         # add embeddings
         for cloud_idx in range(labels.shape[0]):

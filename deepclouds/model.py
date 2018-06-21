@@ -4,7 +4,9 @@ import time
 import numpy as np
 import tensorflow as tf
 import deepclouds.defines as df
+import deepclouds.tf_util as tf_util
 from deepclouds.my_lstm_cell import MyLSTMCell
+
 
 class GenericModel(object):
     """
@@ -86,11 +88,11 @@ class GenericModel(object):
         """ 
         with tf.name_scope("triplet_loss"):
             with tf.name_scope("dist_pos"):
-                pos_dist = tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=-1)
+                self.pos_dist = tf.reduce_sum(tf.square(embedding_a - embedding_p), axis=-1)
             with tf.name_scope("dist_neg"):
-                neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=-1)
+                self.neg_dist = tf.reduce_sum(tf.square(embedding_a - embedding_n), axis=-1)
             with tf.name_scope("copute_loss"):
-                self.basic_loss = tf.maximum(self.margin + pos_dist - neg_dist, 0.0)
+                self.basic_loss = tf.maximum(self.margin + self.pos_dist - self.neg_dist, 0.0)
                 self.non_zero_triplets = tf.count_nonzero(self.basic_loss)
                 self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets))
                 final_loss = tf.reduce_mean(self.basic_loss)
@@ -534,7 +536,7 @@ class RNNBidirectionalModel(GenericModel):
         with tf.name_scope("optimizer"):
             return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function)
 
-class OrderMattersModel(GenericModel):
+class DeepCloudsModel(GenericModel):
     """
     Feature extraction model similar to the one described in Order Matters paper.
     """
@@ -554,6 +556,7 @@ class OrderMattersModel(GenericModel):
                  read_block_units, process_block_steps,
                  normalize_embedding=True, verbose=True,
                  learning_rate=0.0001, gradient_clip=10.0,
+                 t_net=True, read_block_method='birnn', #birnn or pointnet
                  distance='euclidian'):
         """
         Build a model.
@@ -578,16 +581,40 @@ class OrderMattersModel(GenericModel):
         self.read_block_units = read_block_units
         self.process_block_steps = process_block_steps
         self.normalize_embedding = normalize_embedding
-        self.learning_rate = learning_rate
         self.gradient_clip = gradient_clip
         self.verbose = verbose
         self.non_zero_triplets = []
         self.summaries = []
         self.distance = distance
+        self.t_net = t_net
+        self.read_block_method = read_block_method
+        
+        # Variable decays
+        self.global_step = tf.Variable(1, trainable=False, name='global_step')
+        DECAY_STEP = 200000
+        DECAY_RATE = 0.7
+        BN_INIT_DECAY = 0.5
+        BN_DECAY_DECAY_RATE = 0.5
+        BN_DECAY_DECAY_STEP = float(DECAY_STEP)
+        BN_DECAY_CLIP = 0.99
+        
+        # bn_decay
+        bn_momentum = tf.train.exponential_decay(BN_INIT_DECAY, self.global_step*self.batch_size, BN_DECAY_DECAY_STEP,
+                                                 BN_DECAY_DECAY_RATE, staircase=True)
+        self.bn_decay = tf.minimum(BN_DECAY_CLIP, 1 - bn_momentum)
+        tf.summary.scalar('bn_decay', self.bn_decay)
+        
+        # Learning rate
+        BASE_LEARNING_RATE = learning_rate
+        learning_rate = tf.train.exponential_decay(BASE_LEARNING_RATE, self.global_step*self.batch_size,
+                                                   DECAY_STEP, DECAY_RATE, staircase=True)
+        self.learning_rate = tf.maximum(learning_rate, 0.00001)
+        tf.summary.scalar('learning_rate', self.learning_rate)
 
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
             self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
+            self.placeholder_is_tr = tf.placeholder(tf.bool, shape=(), name="input_is_training")
         
         if self.train:
             with tf.name_scope("placeholders"):
@@ -600,23 +627,75 @@ class OrderMattersModel(GenericModel):
 
         # Get hard triplets
         with tf.name_scope("get_embedding"):
-            self.memory_vector_embdg = self._define_read_block(self.placeholder_embdg)
-            #self.memory_vector_embdg = tf.nn.l2_normalize(self.memory_vector_embdg, axis=-1, epsilon=1e-10)
+            
+            # Placeholder
+            self.read_block_input_embd = self.placeholder_embdg
+            
+            # T net?
+            if self.t_net:
+                self.read_block_input_embd = self._define_input_transform_net(self.read_block_input_embd, self.placeholder_is_tr)
+            
+            # Read block
+            if self.read_block_method == 'birnn':
+                self.memory_vector_embdg = self._define_read_block_birnn(self.read_block_input_embd)
+            elif self.read_block_method == 'pointnet':
+                self.memory_vector_embdg = self._define_read_block_pointnet(self.read_block_input_embd, self.placeholder_is_tr, self.bn_decay)
+            else:
+                raise ValueError('Don\'t know this method of read block implementation..')
+            
+#             # T net
+#             if self.t_net and False:
+#                 with tf.variable_scope('transform_net2') as sc:
+#                     feature_transform = tf.expand_dims(tf.squeeze(self.memory_vector_embdg, axis=1), -1)
+#                     transform_2 = feature_transform_net(feature_transform, is_training=self.placeholder_is_tr, bn_decay=None, K=2*read_block_units[0])
+#                 self.memory_vector_embdg = tf.matmul(tf.squeeze(feature_transform, axis=-1), transform_2)
+#                 self.memory_vector_embdg = tf.expand_dims(self.memory_vector_embdg, 1)
+
+            # Process block
             with tf.name_scope("process_block"):
-                self.cloud_embedding_embdg = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
+                #self.cloud_embedding_embdg_pre = tf.squeeze(self._define_process_block(self.memory_vector_embdg), axis=1)
+                self.cloud_embedding_embdg = self._define_process_block(self.memory_vector_embdg)
                 if self.normalize_embedding:
                     self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=-1, epsilon=1e-10)
-
+        
         # Train procedure
         if self.train:
             with tf.name_scope("train"):
-                self.memory_vector_train = self._define_read_block(self.placeholder_train)
-                #self.memory_vector_train = tf.nn.l2_normalize(self.memory_vector_train, axis=-1, epsilon=1e-10)
+
+                # Placeholder
+                self.read_block_input_train = self.placeholder_train
+                
+                # T net?
+                if self.t_net:
+                    self.read_block_input_train = self._define_input_transform_net(self.read_block_input_train, self.placeholder_is_tr)
+
+                # Read block
+                if self.read_block_method == 'birnn':
+                    self.memory_vector_train = self._define_read_block_birnn(self.read_block_input_train)
+                elif self.read_block_method == 'pointnet':
+                    self.memory_vector_train = self._define_read_block_pointnet(self.read_block_input_train, self.placeholder_is_tr, self.bn_decay)
+                else:
+                    raise ValueError('Don\'t know this method of read block implementation..')
+                
+#                 # T net
+#                 if self.t_net and False:
+#                     with tf.variable_scope('transform_net2') as sc:
+#                         parts = tf.unstack(self.memory_vector_train, axis=1)
+#                         outs = []
+#                         for idx in range(len(parts)):
+#                             with tf.variable_scope(str(idx)) as sc:
+#                                 placeholder = tf.expand_dims(parts[idx], axis=-2)
+#                                 t_net_mat = feature_transform_net(placeholder, is_training=self.placeholder_is_tr, bn_decay=None, K=2*read_block_units[0])
+#                                 outs.append(tf.matmul(tf.squeeze(placeholder, axis=-2), t_net_mat))
+#                         self.memory_vector_train = tf.stack(outs, axis=1)
+    
+                # Process block
                 with tf.name_scope("process_block"):
-                    self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
-                    # normalize embedding
+                    self.cloud_embedding_train_pre = self._define_process_block(self.memory_vector_train)
                     if self.normalize_embedding:
-                        self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=-1, epsilon=1e-10)
+                        self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train_pre, axis=-1, epsilon=1e-10)
+
+                # Optimizer
                 with tf.name_scope("optimizer"):
                     self.loss = self._calculate_loss(self.cloud_embedding_train)
                     self.optimizer = self._define_optimizer(self.loss)
@@ -633,24 +712,49 @@ class OrderMattersModel(GenericModel):
         if self.verbose:
             sys.stdout.write("Initializing params...")
             sys.stdout.flush()
-
-        # Define read block params
-        self.read_block_cells = { 'fw' : [], 'bw' : []}
-        self.read_block_states = { 'fw' : [], 'bw' : []}
-        for layers in self.read_block_units:
             
-            cell_fw = tf.contrib.rnn.LSTMCell(layers)
-            cell_bw = tf.contrib.rnn.LSTMCell(layers)
+        if self.read_block_method == 'birnn':
+            
+            # Define read block params
+            self.read_block_cells = { 'fw' : [], 'bw' : []}
+            self.read_block_states = { 'fw' : [], 'bw' : []}
+            for layers in self.read_block_units:
+            
+                cell_fw = tf.contrib.rnn.LSTMCell(layers)
+                cell_bw = tf.contrib.rnn.LSTMCell(layers)
 
-            self.read_block_cells['fw'].append(cell_fw)
-            self.read_block_cells['bw'].append(cell_bw)
+                self.read_block_cells['fw'].append(cell_fw)
+                self.read_block_cells['bw'].append(cell_bw)
 
-            # State
-            state_fw = cell_fw.zero_state(self.batch_size, tf.float32)
-            state_bw = cell_bw.zero_state(self.batch_size, tf.float32)
+                # State
+                state_fw = cell_fw.zero_state(self.batch_size, tf.float32)
+                state_bw = cell_bw.zero_state(self.batch_size, tf.float32)
 
-            self.read_block_states['fw'].append(state_fw)
-            self.read_block_states['bw'].append(state_bw)
+                self.read_block_states['fw'].append(state_fw)
+                self.read_block_states['bw'].append(state_bw)
+                
+        elif self.read_block_method == 'pointnet':
+            
+#             self.params_conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='conv1')
+#             self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
+#             self.params_conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=64, kernel_size = [1,1], scope='conv2')
+#             self.params_conv_2_bn = tf_util.BatchNormVars(scope='convbc2')
+#             self.params_conv_3 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=64, kernel_size = [1,1], scope='conv3')
+#             self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
+#             self.params_conv_4 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='conv4')
+#             self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
+#             self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='conv5')
+#             self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
+            self.params_conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=8, kernel_size = [1,3], scope='conv1')
+            self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
+            self.params_conv_2 = tf_util.Conv2DVars(num_in_channels=8, num_out_channels=32, kernel_size = [1,1], scope='conv2')
+            self.params_conv_2_bn = tf_util.BatchNormVars(scope='convbc2')
+            self.params_conv_3 = tf_util.Conv2DVars(num_in_channels=32, num_out_channels=128, kernel_size = [1,1], scope='conv3')
+            self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
+            self.params_conv_4 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=256, kernel_size = [1,1], scope='conv4')
+            self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
+            self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=1024, kernel_size = [1,1], scope='conv5')
+            self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
 
         # Define process block params
         self.process_block_cells = []
@@ -660,10 +764,112 @@ class OrderMattersModel(GenericModel):
                                                        num_out = self.read_block_units[-1]*2, name = 'process_layer_' + str(layer_idx)))
             self.process_block_state_starts.append(self.process_block_cells[-1].zero_state(self.batch_size, tf.float32))
 
+        # Define input t-net-1 params
+        if self.t_net:
+            self.params_t1conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='t1con1')
+            self.params_t1conv_1_bn = tf_util.BatchNormVars(scope='t1convbc1')
+            self.params_t1conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='t1con2')
+            self.params_t1conv_2_bn = tf_util.BatchNormVars(scope='t1convbc2')
+            self.params_t1conv_3 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='t1con3')
+            self.params_t1conv_3_bn = tf_util.BatchNormVars(scope='t1convbc3')
+            self.params_t1fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t1fc1')
+            self.params_t1fc1_bn = tf_util.BatchNormVars(scope='t1fc1bn')
+            self.params_t1fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t1fc2')
+            self.params_t1fc2_bn = tf_util.BatchNormVars(scope='t1fc2bn')
+
+            self.params_t1xyz_weights = tf.get_variable('weights', [256, 9], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
+            self.params_t1xyz_biases = tf.get_variable('biases', initializer=np.array([1,0,0,0,1,0,0,0,1], dtype=np.float32))
+
         if self.verbose:
             print "OK!"
 
-    def _define_read_block(self, input, scope='read_block'):
+    def _define_input_transform_net_inner(self, input, is_training, bn_decay=None):
+        batch_size = input.get_shape()[0].value
+        num_point = input.get_shape()[1].value
+
+        input_image = tf.expand_dims(input, -1)
+        net = tf_util.conv2d(input_image, self.params_t1conv_1, self.params_t1conv_1_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=True, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_t1conv_2, self.params_t1conv_2_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=True, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_t1conv_3, self.params_t1conv_3_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=True, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.max_pool2d(net, [num_point,1],
+                                 padding='VALID', scope='tmaxpool')
+
+        net = tf.reshape(net, [batch_size, -1])
+        net = tf_util.fully_connected(net, self.params_t1fc1, self.params_t1fc1_bn,
+                                      bn=True, is_training=is_training,
+                                      bn_decay=bn_decay)
+        net = tf_util.fully_connected(net, self.params_t1fc2, self.params_t1fc2_bn,
+                                      bn=True, is_training=is_training,
+                                      bn_decay=bn_decay)
+
+        with tf.variable_scope('transform_XYZ') as sc:
+            transform = tf.matmul(net, self.params_t1xyz_weights)
+            transform = tf.nn.bias_add(transform, self.params_t1xyz_biases)
+
+        transform = tf.reshape(transform, [batch_size, 3, 3])
+        return transform
+
+    def _define_input_transform_net(self, input, is_training, bn_decay=None, scope='transform_net_1'):
+
+        with tf.name_scope(scope):
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+
+            if len(inputs) == 1:
+                
+                if self.verbose:
+                    sys.stdout.write("Defining transform net 1...")
+                    sys.stdout.flush()
+                    
+                transform_1 = self._define_input_transform_net_inner(inputs[0], is_training=is_training, bn_decay=bn_decay)
+                out = tf.matmul(inputs[0], transform_1)
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([out], axis=1)
+
+            elif len(inputs) == 3:
+
+                if self.verbose:
+                    sys.stdout.write("Defining transform net 1 for anchor...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_input_transform_net_inner(inputs[0], is_training=is_training, bn_decay=bn_decay)
+                anr = tf.matmul(inputs[0], transform_1)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining transform net 1 for positive...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_input_transform_net_inner(inputs[1], is_training=is_training, bn_decay=bn_decay)
+                pos = tf.matmul(inputs[1], transform_1)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining transform net 1 for negative...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_input_transform_net_inner(inputs[2], is_training=is_training, bn_decay=bn_decay)
+                neg = tf.matmul(inputs[2], transform_1)
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([anr, pos, neg], axis=1)
+
+            return ret
+
+    def _define_read_block_birnn(self, input, scope='read_block'):
         """
         Calculate forward propagation of a RNN.
 
@@ -728,6 +934,85 @@ class OrderMattersModel(GenericModel):
                                                                            initial_states_bw=self.read_block_states['bw'],
                                                                            inputs=inputs[2], dtype=tf.float32,
                                                                            scope="negative")
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([anr, pos, neg], axis=1)
+            else:
+                raise ValueError("I cannot handle this!")
+
+            # return
+            return ret
+
+    def _define_read_block_pointnet_inner(self, input, is_training, bn_decay=None):
+        
+        batch_size = input.get_shape()[0].value
+        num_point = input.get_shape()[1].value
+        input_image = tf.expand_dims(input, -1)
+        net = tf_util.conv2d(input_image, self.params_conv_1, self.params_conv_1_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_conv_2, self.params_conv_2_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+#         #HERE FEATURE TRANSFORM?
+        net = tf_util.conv2d(net, self.params_conv_3, self.params_conv_3_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_conv_4, self.params_conv_4_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_conv_5, self.params_conv_5_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf.squeeze(net, axis=-2)
+        return net
+        
+    def _define_read_block_pointnet(self, input, is_training, bn_decay=None, scope='read_block'):
+
+        with tf.name_scope(scope):
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+
+            if len(inputs) == 1:
+                
+                if self.verbose:
+                    sys.stdout.write("Defining read block for embedding [pointnet]...")
+                    sys.stdout.flush()
+
+                out = self._define_read_block_pointnet_inner(inputs[0], is_training, bn_decay)
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([out], axis=1)
+                
+            elif len(inputs) == 3:
+
+                if self.verbose:
+                    sys.stdout.write("Defining read block for anchor...")
+                    sys.stdout.flush()
+
+                anr = self._define_read_block_pointnet_inner(inputs[0], is_training, bn_decay)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining read block for positive...")
+                    sys.stdout.flush()
+
+                pos = self._define_read_block_pointnet_inner(inputs[1], is_training, bn_decay)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining read block for negative...")
+                    sys.stdout.flush()
+
+                neg = self._define_read_block_pointnet_inner(inputs[2], is_training, bn_decay)
 
                 if self.verbose:
                     print "OK!"
@@ -906,7 +1191,11 @@ class OrderMattersModel(GenericModel):
                 grads, vars = zip(*grads_and_vars)
                 clipped_grads, _ = tf.clip_by_global_norm(grads, self.gradient_clip)
                 grads_and_vars = zip(clipped_grads, vars)
-            # Summary
+            # Summaryssssssssss
             for grad, var in grads_and_vars:
-                self.summaries.append(tf.summary.scalar(var.name, tf.norm(grad)))
-            return optimizer.apply_gradients(grads_and_vars)
+                if grad == None:
+                    print("NULL GRADS: ", var.name)
+                    #exit()
+                else:
+                    self.summaries.append(tf.summary.scalar(var.name, tf.norm(grad)))
+            return optimizer.apply_gradients(grads_and_vars, self.global_step)

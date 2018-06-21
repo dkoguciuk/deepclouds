@@ -15,15 +15,16 @@ import train_with_hparam
 import deepclouds.defines as df
 import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
-from deepclouds.model import OrderMattersModel
+from deepclouds.model import DeepCloudsModel
 
 CLOUD_SIZE = 128
-CLASSIFIER_MODEL_LOAD = True
-CLASSIFIER_MODEL_TRAIN = False
+CLASSIFIER_MODEL_LOAD = False
+CLASSIFIER_MODEL_TRAIN = True
+SAMPLING_METHOD = 'via_graphs'
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [2048, 1024, 512, 256, 128, 40]):
+                         classifier_layers = [2048, 512, 128, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -41,11 +42,16 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
-            features_model = OrderMattersModel(train=False,
-                                               batch_size = batch_size,
-                                               pointcloud_size = CLOUD_SIZE,
-                                               read_block_units = read_block_units,
-                                               process_block_steps=process_block_steps)
+            features_model = DeepCloudsModel(train=False,
+                                             batch_size = batch_size,
+                                             pointcloud_size = CLOUD_SIZE,
+                                             read_block_units = read_block_units,
+                                             process_block_steps=process_block_steps,
+                                             distance='cosine',
+                                             #normalize_embedding=False,
+                                             normalize_embedding=True,
+                                             t_net=False,
+                                             read_block_method='pointnet')
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
             features_model_saver = tf.train.Saver(features_vars)
@@ -75,7 +81,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         ##############################################################################################
 
         sess.run(tf.global_variables_initializer())
-        features_model_saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up_modelnet'))
+        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
         if CLASSIFIER_MODEL_LOAD:
             classifier_model_saver.restore(sess, tf.train.latest_checkpoint('models_classifier'))
 
@@ -109,7 +115,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                                                      shuffle_points=True,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
-                                                                     rotate_pointclouds_up=True):
+                                                                     rotate_pointclouds_up=True,
+                                                                     sampling_method=SAMPLING_METHOD):
     
                     ##################################################################################################
                     ######################################### GET EMBEDDING ##########################################
@@ -117,7 +124,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     
                     # count embeddings
                     embedding_input = np.stack([clouds], axis=1)
-                    embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
+                    embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input,
+                                                                                      features_model.placeholder_is_tr : False})
+                    embeddings = np.squeeze(embeddings)
     
                     ##################################################################################################
                     ############################################# TRAIN ##############################################
@@ -156,7 +165,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     # count embeddings
                     embedding_input = np.stack([clouds_padded], axis=1)
                     embeddings = sess.run(features_model.get_embeddings(),
-                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                                               feed_dict={features_model.placeholder_embdg: embedding_input,
+                                                          features_model.placeholder_is_tr : False})
+                    embeddings = np.squeeze(embeddings)
                         
                     # One hot
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
@@ -216,7 +227,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     # count embeddings
                     embedding_input = np.stack([clouds_padded], axis=1)
                     embeddings = sess.run(features_model.get_embeddings(),
-                                               feed_dict={features_model.placeholder_embdg: embedding_input})
+                                               feed_dict={features_model.placeholder_embdg: embedding_input,
+                                                          features_model.placeholder_is_tr : False})
                         
                     # One hot
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))

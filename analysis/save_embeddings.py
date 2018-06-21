@@ -11,13 +11,18 @@ import shutil
 import argparse
 import numpy as np
 import tensorflow as tf
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(BASE_DIR)
+sys.path.append(os.path.join(BASE_DIR, '../'))
 import deepclouds.defines as df
 import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
-from deepclouds.model import RNNBidirectionalModel, MLPModel, OrderMattersModel
+from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 128
-SYNTHETIC = False
+CLOUD_SIZE = 16
+SYNTHETIC = True
+SAMPLING_METHOD = 'via_graphs'
 
 def save_embeddings(device):
 
@@ -25,8 +30,8 @@ def save_embeddings(device):
     tf.reset_default_graph()
 
     # Generate data if needed
-    #data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
-    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
+    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    #data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -34,11 +39,12 @@ def save_embeddings(device):
 
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
-            features_model = OrderMattersModel(train=False,
+            features_model = DeepCloudsModel(train=False,
                                                batch_size = 40,
                                                pointcloud_size = CLOUD_SIZE,
-                                               read_block_units = [512],
-                                               process_block_steps=[4])
+                                               read_block_units = [32],
+                                               process_block_steps=[4],
+                                               t_net=True)
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
             features_model_saver = tf.train.Saver(features_vars)
@@ -58,7 +64,7 @@ def save_embeddings(device):
         sess.run(tf.global_variables_initializer())
          
         # saver    
-        saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up_modelnet'))
+        saver.restore(sess, tf.train.latest_checkpoint('models'))
         
 #         variables_names = [v.name for v in tf.trainable_variables()]
 #         values = sess.run(variables_names)
@@ -77,11 +83,13 @@ def save_embeddings(device):
                                                                      shuffle_points=True,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
-                                                                     rotate_pointclouds_up=True):
+                                                                     rotate_pointclouds_up=True,
+                                                                     sampling_method=SAMPLING_METHOD):
 
             # count embeddings
             embedding_input = np.stack([clouds], axis=1)
-            embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input})
+            embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input,
+                                                                              features_model.placeholder_is_tr : False})
 
             for class_idx in range(40):
                 data_filapath = "embeddings/data_%04d.npy" % (index*40 + class_idx)

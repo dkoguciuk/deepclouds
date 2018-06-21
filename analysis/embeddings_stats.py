@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn import decomposition
 
-READ_BLOCK_SIZE = 512
+READ_BLOCK_SIZE = 32
 
 def main(argv):
 
@@ -89,16 +89,16 @@ def main(argv):
 #     print "t-SNE features calculated in ", tsne_time - pca_time, " seconds "
     # plots
     
-    plt.figure(figsize=(15, 15))
-    print(features_pca.shape)
-    plt.scatter(features[0][:, 0], features[0][:, 1], c='red')
+#    plt.figure(figsize=(15, 15))
+#    print(features_pca.shape)
+#    plt.scatter(features[0][:, 0], features[0][:, 1], c='red')
     #plt.scatter(feature_2[:, 0], feature_2[:, 1], c='blue')
     #plt.scatter(feature_3[:, 0], feature_3[:, 1], c='orange')
     #plt.scatter(feature_4[:, 0], feature_4[:, 1], c='magenta')
     #plt.scatter(feature_4[:, 0], feature_4[:, 1], c='gray')
     #plt.scatter(feature_5[:, 0], feature_5[:, 1], c='tan')
     #plt.scatter(feature_6[:, 0], feature_6[:, 1], c='gold')
-    plt.scatter(features[7][:, 0], features[7][:, 1], c='navy')
+#    plt.scatter(features[7][:, 0], features[7][:, 1], c='navy')
     #plt.scatter(feature_8[:, 0], feature_8[:, 1], c='g')
     #plt.scatter(feature_9[:, 0], feature_9[:, 1], c='cyan')
     #plt.scatter(feature_10[:, 0], feature_10[:, 1], c='indigo')
@@ -107,12 +107,12 @@ def main(argv):
     #plt.scatter(features[13][:, 0], features[13][:, 1], c='olive')
     #plt.scatter(features[14][:, 0], features[14][:, 1], c='purple')
     #plt.scatter(features[15][:, 0], features[15][:, 1], c='sienna')
-    plt.scatter(features[24][:, 0], features[24][:, 1], c='green')
+    #plt.scatter(features[24][:, 0], features[24][:, 1], c='green')
     #plt.scatter(feature_8[:, 0], feature_8[:, 1], c='violet')
     #plt.scatter(features_pca[:, 0], features_pca[:, 1], c=dec_labels)
 #     plt.figure(figsize=(15, 15))
 #     plt.scatter(features_tsne[:, 0], features_tsne[:, 1], c=dec_labels)
-    plt.show()
+    #plt.show()
     
     print("AVERAGE POS DIST = ", np.mean(pos_man))
     print("AVERAGE NEG DIST = ", np.mean(neg_man))
