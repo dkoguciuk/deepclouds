@@ -22,14 +22,15 @@ from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
 
-CLOUD_SIZE = 128
+CLOUD_SIZE = 8
 DISTANCE = 'cosine'
-SAMPLING_METHOD = 'via_graphs'
+SAMPLING_METHOD = 'random'
 LOAD_MODEL = False
 CALC_DIST = True
-SYNTHETIC = False
-READ_BLOCK_UNITS = [512]
+SYNTHETIC = True
+READ_BLOCK_UNITS = [64]
 ROTATE_CLOUDS_UP = True
+SHUFFLE_CLOUDS = False
 checkpoint_skip_epochs = 50
 
 def plot_bar(e):
@@ -84,7 +85,8 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
 
     # Generate data if needed
     if synthetic:
-        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE, permuted=SHUFFLE_CLOUDS,
+                                          rotated_up=ROTATE_CLOUDS_UP, rotated_rand=False)
     else:
         data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
@@ -94,13 +96,11 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
             model = DeepCloudsModel(train=True,
                                     batch_size = batch_size, pointcloud_size = CLOUD_SIZE,
                                     read_block_units = READ_BLOCK_UNITS, process_block_steps=[4],
-                                    learning_rate=learning_rate,
-                                    gradient_clip=gradient_clip, distance=DISTANCE,
-                                    #normalize_embedding=False,
-                                    normalize_embedding=True,
-                                    t_net=False,
-                                    read_block_method='pointnet')
-                                    #read_block_method='birnn')
+                                    learning_rate=learning_rate, gradient_clip=gradient_clip,
+                                    normalize_embedding=True, verbose=True,
+                                    t_net=False, distance=DISTANCE,
+                                    read_block_method='birnn')
+                                    #read_block_method='pointnet')
 
     # PRINT PARAM NO
 #    total_parameters = 0
@@ -135,7 +135,6 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
         sess.run(tf.global_variables_initializer()) 
         
         if LOAD_MODEL:
-            #features_model_saver.restore(sess, tf.train.latest_checkpoint('256_points_modelnet'))
             features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
@@ -160,7 +159,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
             epoch_batch_idx = 0
             for clouds, labels in data_gen.generate_representative_batch(train=True,
                                                                          instances_number=2,
-                                                                         shuffle_points=True,
+                                                                         shuffle_points=SHUFFLE_CLOUDS,
                                                                          jitter_points=True,
                                                                          rotate_pointclouds=False,
                                                                          rotate_pointclouds_up=ROTATE_CLOUDS_UP,
@@ -235,7 +234,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                     
                     # pos/neg dist
                     if CALC_DIST:
-                        pos_man, neg_man = test_features_extraction(data_gen, model, sess, True)
+                        pos_man, neg_man = test_features_extraction(data_gen, model, sess, partial_score=synthetic)
                         
                     #time_5 = timer()
                       

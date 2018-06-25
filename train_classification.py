@@ -17,14 +17,18 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 128
+CLOUD_SIZE = 8
 CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
-SAMPLING_METHOD = 'via_graphs'
+SAMPLING_METHOD = 'random'
+SYNTHETIC = True
+READ_BLOCK_UNITS = [64]
+ROTATE_CLOUDS_UP = True
+SHUFFLE_CLOUDS = False
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [2048, 512, 128, 40]):
+                         classifier_layers = [256, 128, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -33,8 +37,11 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     tf.reset_default_graph()
 
     # Generate data if needed
-    #data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
-    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
+    if SYNTHETIC:
+        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE, permuted=SHUFFLE_CLOUDS,
+                                          rotated_up=ROTATE_CLOUDS_UP, rotated_rand=False)
+    else:
+        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -45,13 +52,12 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             features_model = DeepCloudsModel(train=False,
                                              batch_size = batch_size,
                                              pointcloud_size = CLOUD_SIZE,
-                                             read_block_units = read_block_units,
+                                             read_block_units = READ_BLOCK_UNITS,
                                              process_block_steps=process_block_steps,
-                                             distance='cosine',
-                                             #normalize_embedding=False,
-                                             normalize_embedding=True,
-                                             t_net=False,
-                                             read_block_method='pointnet')
+                                             normalize_embedding=True, verbose=True,
+                                             t_net=False, read_block_method='birnn',
+                                             distance='cosine')
+            
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
             features_model_saver = tf.train.Saver(features_vars)
@@ -81,7 +87,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         ##############################################################################################
 
         sess.run(tf.global_variables_initializer())
-        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
+        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_temp'))
         if CLASSIFIER_MODEL_LOAD:
             classifier_model_saver.restore(sess, tf.train.latest_checkpoint('models_classifier'))
 
@@ -112,10 +118,10 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 #epoch_batch_idx = 1
                 for clouds, labels in data_gen.generate_random_batch(train = True,
                                                                      batch_size = batch_size,
-                                                                     shuffle_points=True,
+                                                                     shuffle_points=SHUFFLE_CLOUDS,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
-                                                                     rotate_pointclouds_up=True,
+                                                                     rotate_pointclouds_up=ROTATE_CLOUDS_UP,
                                                                      sampling_method=SAMPLING_METHOD):
     
                     ##################################################################################################
