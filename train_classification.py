@@ -17,18 +17,18 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 8
+CLOUD_SIZE = 64
 CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
 SAMPLING_METHOD = 'random'
 SYNTHETIC = True
-READ_BLOCK_UNITS = [64]
+READ_BLOCK_UNITS = [128]
 ROTATE_CLOUDS_UP = True
-SHUFFLE_CLOUDS = False
+SHUFFLE_CLOUDS = True
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [256, 128, 40]):
+                         classifier_layers = [512, 256, 128, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -55,7 +55,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                              read_block_units = READ_BLOCK_UNITS,
                                              process_block_steps=process_block_steps,
                                              normalize_embedding=True, verbose=True,
-                                             t_net=False, read_block_method='birnn',
+                                             input_t_net=True, feature_t_net=True,
+                                             read_block_method='pointnet',
                                              distance='cosine')
             
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,

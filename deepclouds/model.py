@@ -541,7 +541,7 @@ class DeepCloudsModel(GenericModel):
     Feature extraction model similar to the one described in Order Matters paper.
     """
 
-    MODEL_NAME = "OrderMattersModel"
+    MODEL_NAME = "DeepCloudsModel"
     """
     Name of the model, which will be used as a directory for tensorboard logs. 
     """
@@ -556,7 +556,8 @@ class DeepCloudsModel(GenericModel):
                  read_block_units, process_block_steps,
                  normalize_embedding=True, verbose=True,
                  learning_rate=0.0001, gradient_clip=10.0,
-                 t_net=False, read_block_method='birnn', #birnn or pointnet
+                 input_t_net=False, feature_t_net=False,
+                 read_block_method='birnn', #birnn or pointnet
                  distance='cosine'):
         """
         Build a model.
@@ -586,7 +587,8 @@ class DeepCloudsModel(GenericModel):
         self.non_zero_triplets = []
         self.summaries = []
         self.distance = distance
-        self.t_net = t_net
+        self.input_t_net = input_t_net
+        self.feature_t_net = feature_t_net
         self.read_block_method = read_block_method
         
         # Variable decays
@@ -633,9 +635,9 @@ class DeepCloudsModel(GenericModel):
             # Placeholder
             self.read_block_input_embd = self.placeholder_embdg
             
-#             # T net?
-#             if self.t_net:
-#                 self.read_block_input_embd = self._define_input_transform_net(self.read_block_input_embd, self.placeholder_is_tr)
+            # T net?
+            if self.input_t_net:
+                self.read_block_input_embd = self._define_input_transform_net(self.read_block_input_embd, self.placeholder_is_tr, bn_decay=None)
             
             # Read block
             if self.read_block_method == 'birnn':
@@ -645,13 +647,9 @@ class DeepCloudsModel(GenericModel):
             else:
                 raise ValueError('Don\'t know this method of read block implementation..')
             
-#             # T net
-#             if self.t_net and False:
-#                 with tf.variable_scope('transform_net2') as sc:
-#                     feature_transform = tf.expand_dims(tf.squeeze(self.memory_vector_embdg, axis=1), -1)
-#                     transform_2 = feature_transform_net(feature_transform, is_training=self.placeholder_is_tr, bn_decay=None, K=2*read_block_units[0])
-#                 self.memory_vector_embdg = tf.matmul(tf.squeeze(feature_transform, axis=-1), transform_2)
-#                 self.memory_vector_embdg = tf.expand_dims(self.memory_vector_embdg, 1)
+            # T net
+            if self.feature_t_net:
+                self.memory_vector_embdg = self._define_feature_transform_net(self.memory_vector_embdg, is_training=self.placeholder_is_tr, bn_decay=None)
 
             # Process block
             with tf.name_scope("process_block"):
@@ -666,9 +664,9 @@ class DeepCloudsModel(GenericModel):
                 # Placeholder
                 self.read_block_input_train = self.placeholder_train
                 
-#                 # T net?
-#                 if self.t_net:
-#                     self.read_block_input_train = self._define_input_transform_net(self.read_block_input_train, self.placeholder_is_tr)
+                # T net?
+                if self.input_t_net:
+                    self.read_block_input_train = self._define_input_transform_net(self.read_block_input_train, self.placeholder_is_tr)
 
                 # Read block
                 if self.read_block_method == 'birnn':
@@ -678,17 +676,9 @@ class DeepCloudsModel(GenericModel):
                 else:
                     raise ValueError('Don\'t know this method of read block implementation..')
                 
-#                 # T net
-#                 if self.t_net and False:
-#                     with tf.variable_scope('transform_net2') as sc:
-#                         parts = tf.unstack(self.memory_vector_train, axis=1)
-#                         outs = []
-#                         for idx in range(len(parts)):
-#                             with tf.variable_scope(str(idx)) as sc:
-#                                 placeholder = tf.expand_dims(parts[idx], axis=-2)
-#                                 t_net_mat = feature_transform_net(placeholder, is_training=self.placeholder_is_tr, bn_decay=None, K=2*read_block_units[0])
-#                                 outs.append(tf.matmul(tf.squeeze(placeholder, axis=-2), t_net_mat))
-#                         self.memory_vector_train = tf.stack(outs, axis=1)
+                # T net
+                if self.feature_t_net:
+                    self.memory_vector_train = self._define_feature_transform_net(self.memory_vector_train, is_training=self.placeholder_is_tr, bn_decay=None)
 
                 # Process block
                 with tf.name_scope("process_block"):
@@ -768,17 +758,6 @@ class DeepCloudsModel(GenericModel):
                 self.read_block_states['bw'].append(state_bw)
                 
         elif self.read_block_method == 'pointnet':
-             
-#             self.params_conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='conv1')
-#             self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
-#             self.params_conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=64, kernel_size = [1,1], scope='conv2')
-#             self.params_conv_2_bn = tf_util.BatchNormVars(scope='convbc2')
-#             self.params_conv_3 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=64, kernel_size = [1,1], scope='conv3')
-#             self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
-#             self.params_conv_4 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='conv4')
-#             self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
-#             self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='conv5')
-#             self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
             self.params_conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=8, kernel_size = [1,3], scope='conv1')
             self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
             self.params_conv_2 = tf_util.Conv2DVars(num_in_channels=8, num_out_channels=32, kernel_size = [1,1], scope='conv2')
@@ -787,7 +766,7 @@ class DeepCloudsModel(GenericModel):
             self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
             self.params_conv_4 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=256, kernel_size = [1,1], scope='conv4')
             self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
-            self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=1024, kernel_size = [1,1], scope='conv5')
+            self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=self.read_block_units[-1]*2, kernel_size = [1,1], scope='conv5')
             self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
 
         # Define process block params
@@ -798,21 +777,38 @@ class DeepCloudsModel(GenericModel):
                                                        num_out = self.read_block_units[-1]*2, name = 'process_layer_' + str(layer_idx)))
             self.process_block_state_starts.append(self.process_block_cells[-1].zero_state(self.batch_size, tf.float32))
 
-#         # Define input t-net-1 params
-#         if self.t_net:
-#             self.params_t1conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='t1con1')
-#             self.params_t1conv_1_bn = tf_util.BatchNormVars(scope='t1convbc1')
-#             self.params_t1conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='t1con2')
-#             self.params_t1conv_2_bn = tf_util.BatchNormVars(scope='t1convbc2')
-#             self.params_t1conv_3 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='t1con3')
-#             self.params_t1conv_3_bn = tf_util.BatchNormVars(scope='t1convbc3')
-#             self.params_t1fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t1fc1')
-#             self.params_t1fc1_bn = tf_util.BatchNormVars(scope='t1fc1bn')
-#             self.params_t1fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t1fc2')
-#             self.params_t1fc2_bn = tf_util.BatchNormVars(scope='t1fc2bn')
-# 
-#             self.params_t1xyz_weights = tf.get_variable('weights', [256, 9], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
-#             self.params_t1xyz_biases = tf.get_variable('biases', initializer=np.array([1,0,0,0,1,0,0,0,1], dtype=np.float32))
+        # Define input t-net-1 params
+        if self.input_t_net:
+            self.params_t1conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='t1con1')
+            self.params_t1conv_1_bn = tf_util.BatchNormVars(scope='t1convbc1')
+            self.params_t1conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='t1con2')
+            self.params_t1conv_2_bn = tf_util.BatchNormVars(scope='t1convbc2')
+            self.params_t1conv_3 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='t1con3')
+            self.params_t1conv_3_bn = tf_util.BatchNormVars(scope='t1convbc3')
+            self.params_t1fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t1fc1')
+            self.params_t1fc1_bn = tf_util.BatchNormVars(scope='t1fc1bn')
+            self.params_t1fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t1fc2')
+            self.params_t1fc2_bn = tf_util.BatchNormVars(scope='t1fc2bn')
+ 
+            self.params_t1xyz_weights = tf.get_variable('t1weights', [256, 9], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
+            self.params_t1xyz_biases = tf.get_variable('t1biases', initializer=np.array([1,0,0,0,1,0,0,0,1], dtype=np.float32))
+
+        # Define input t-net-2 params
+        if self.feature_t_net:
+            self.params_t2conv_1 = tf_util.Conv2DVars(num_in_channels=2*self.read_block_units[-1], num_out_channels=256, kernel_size = [1,1], scope='t2con1')
+            self.params_t2conv_1_bn = tf_util.BatchNormVars(scope='t2convbc1')
+            self.params_t2conv_2 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=512, kernel_size = [1,1], scope='t2con2')
+            self.params_t2conv_2_bn = tf_util.BatchNormVars(scope='t2convbc2')
+            self.params_t2conv_3 = tf_util.Conv2DVars(num_in_channels=512, num_out_channels=1024, kernel_size = [1,1], scope='t2con3')
+            self.params_t2conv_3_bn = tf_util.BatchNormVars(scope='t2convbc3')
+            self.params_t2fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t2fc1')
+            self.params_t2fc1_bn = tf_util.BatchNormVars(scope='t2fc1bn')
+            self.params_t2fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t2fc2')
+            self.params_t2fc2_bn = tf_util.BatchNormVars(scope='t2fc2bn')
+ 
+            K = 2*self.read_block_units[-1]
+            self.params_t2xyz_weights = tf.get_variable('t2weights', [256, K*K], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
+            self.params_t2xyz_biases = tf.get_variable('t2biases', initializer=np.eye(K, dtype=np.float32).flatten())
 
         if self.verbose:
             print "OK!"
@@ -824,25 +820,24 @@ class DeepCloudsModel(GenericModel):
         input_image = tf.expand_dims(input, -1)
         net = tf_util.conv2d(input_image, self.params_t1conv_1, self.params_t1conv_1_bn,
                              padding='VALID', stride=[1,1],
-                             bn=True, is_training=is_training,
+                             bn=False, is_training=is_training,
                              bn_decay=bn_decay)
         net = tf_util.conv2d(net, self.params_t1conv_2, self.params_t1conv_2_bn,
                              padding='VALID', stride=[1,1],
-                             bn=True, is_training=is_training,
+                             bn=False, is_training=is_training,
                              bn_decay=bn_decay)
         net = tf_util.conv2d(net, self.params_t1conv_3, self.params_t1conv_3_bn,
                              padding='VALID', stride=[1,1],
-                             bn=True, is_training=is_training,
+                             bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.max_pool2d(net, [num_point,1],
-                                 padding='VALID', scope='tmaxpool')
+        net = tf_util.max_pool2d(net, [num_point,1], padding='VALID', scope='t1maxpool')
 
         net = tf.reshape(net, [batch_size, -1])
         net = tf_util.fully_connected(net, self.params_t1fc1, self.params_t1fc1_bn,
-                                      bn=True, is_training=is_training,
+                                      bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
         net = tf_util.fully_connected(net, self.params_t1fc2, self.params_t1fc2_bn,
-                                      bn=True, is_training=is_training,
+                                      bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
 
         with tf.variable_scope('transform_XYZ') as sc:
@@ -894,6 +889,91 @@ class DeepCloudsModel(GenericModel):
                     sys.stdout.flush()
 
                 transform_1 = self._define_input_transform_net_inner(inputs[2], is_training=is_training, bn_decay=bn_decay)
+                neg = tf.matmul(inputs[2], transform_1)
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([anr, pos, neg], axis=1)
+
+            return ret
+
+    def _define_feature_transform_net_inner(self, input, is_training, bn_decay=None):
+        batch_size = input.get_shape()[0].value
+        num_point = input.get_shape()[1].value
+    
+        input_image = tf.expand_dims(input, -2)
+        net = tf_util.conv2d(input_image, self.params_t2conv_1, self.params_t2conv_1_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_t2conv_2, self.params_t2conv_2_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.conv2d(net, self.params_t2conv_3, self.params_t2conv_3_bn,
+                             padding='VALID', stride=[1,1],
+                             bn=False, is_training=is_training,
+                             bn_decay=bn_decay)
+        net = tf_util.max_pool2d(net, [num_point,1], padding='VALID', scope='t2maxpool')
+    
+        net = tf.reshape(net, [batch_size, -1])
+        net = tf_util.fully_connected(net, self.params_t2fc1, self.params_t2fc1_bn, 
+                                      bn=False, is_training=is_training,
+                                      bn_decay=bn_decay)
+        net = tf_util.fully_connected(net, self.params_t1fc2, self.params_t1fc2_bn,
+                                      bn=False, is_training=is_training,
+                                      bn_decay=bn_decay)
+    
+        with tf.variable_scope('transform_feat') as sc:
+            transform = tf.matmul(net, self.params_t2xyz_weights)
+            transform = tf.nn.bias_add(transform, self.params_t2xyz_biases)
+    
+        transform = tf.reshape(transform, [batch_size, 2*self.read_block_units[0], 2*self.read_block_units[0]])
+        return transform
+
+    def _define_feature_transform_net(self, input, is_training, bn_decay=None, scope='transform_net_2'):
+
+        with tf.name_scope(scope):
+            # Get layer output
+            inputs = tf.unstack(input, axis=1)
+            ret = None
+
+            if len(inputs) == 1:
+                
+                if self.verbose:
+                    sys.stdout.write("Defining transform net 2...")
+                    sys.stdout.flush()
+                    
+                transform_1 = self._define_feature_transform_net_inner(inputs[0], is_training=is_training, bn_decay=bn_decay)
+                out = tf.matmul(inputs[0], transform_1)
+
+                if self.verbose:
+                    print "OK!"
+
+                ret = tf.stack([out], axis=1)
+
+            elif len(inputs) == 3:
+
+                if self.verbose:
+                    sys.stdout.write("Defining transform net 2 for anchor...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_feature_transform_net_inner(inputs[0], is_training=is_training, bn_decay=bn_decay)
+                anr = tf.matmul(inputs[0], transform_1)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining transform net 2 for positive...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_feature_transform_net_inner(inputs[1], is_training=is_training, bn_decay=bn_decay)
+                pos = tf.matmul(inputs[1], transform_1)
+
+                if self.verbose:
+                    sys.stdout.write("OK!\nDefining transform net 2 for negative...")
+                    sys.stdout.flush()
+
+                transform_1 = self._define_feature_transform_net_inner(inputs[2], is_training=is_training, bn_decay=bn_decay)
                 neg = tf.matmul(inputs[2], transform_1)
 
                 if self.verbose:

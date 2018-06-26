@@ -22,16 +22,17 @@ from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
 
-CLOUD_SIZE = 8
+CLOUD_SIZE = 128
 DISTANCE = 'cosine'
 SAMPLING_METHOD = 'random'
 LOAD_MODEL = False
 CALC_DIST = True
-SYNTHETIC = True
-READ_BLOCK_UNITS = [64]
-ROTATE_CLOUDS_UP = True
-SHUFFLE_CLOUDS = False
+SYNTHETIC = False
+READ_BLOCK_UNITS = [256]
+ROTATE_CLOUDS_UP = False
+SHUFFLE_CLOUDS = True
 checkpoint_skip_epochs = 50
+READ_BLOCK_METHOD = 'pointnet'
 
 def plot_bar(e):
     bins = 64
@@ -100,9 +101,8 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                     read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
-                                    t_net=False, distance=DISTANCE,
-                                    read_block_method='birnn')
-                                    # read_block_method='pointnet')
+                                    input_t_net=True, feature_t_net=True,
+                                    distance=DISTANCE, read_block_method=READ_BLOCK_METHOD)
 
     # PRINT PARAM NO
 #    total_parameters = 0
@@ -137,7 +137,8 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
         sess.run(tf.global_variables_initializer()) 
         
         if LOAD_MODEL:
-            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
+            #features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
+            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_temp'))
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
@@ -152,7 +153,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
  
         # Do the training loop
         non_zeros = []
-        summary_skip_batch = 120  # one epoch on modelnet
+        summary_skip_batch = 100  # one epoch on modelnet
         for epoch in range(epochs):
  
             time_0 = timer()
@@ -177,11 +178,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 embedding_input = np.stack([clouds], axis=1)
                 embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input,
                                                                          model.margin : [margin],
-                                                                         model.placeholder_label : labels,
                                                                          model.placeholder_is_tr : True})
-                
-                print 'OK'
-                exit()
                 
                 # time_2 = timer()
                 
