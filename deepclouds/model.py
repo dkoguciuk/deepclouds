@@ -615,6 +615,7 @@ class DeepCloudsModel(GenericModel):
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
             self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
+            #self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size], name="input_labels")
             self.placeholder_is_tr = tf.placeholder(tf.bool, shape=(), name="input_is_training")
         
         if self.train:
@@ -703,6 +704,39 @@ class DeepCloudsModel(GenericModel):
 
             # merge summaries and write
             self.summary = tf.summary.merge(self.summaries)
+
+    def find_semihard_triples(self, embeddings, labels):
+        """
+        embeddings (tf.tensor of size [B, 1, E])
+        labels (tf.tensor of size [B]) 
+        """
+        raise ValueError("This method is not implemented yet!")
+    
+        i0 = tf.constant(0)
+        d0 = tf.zeros([1, 1])
+        
+        while_condition = lambda i, d: tf.less(i, embeddings.get_shape()[0])
+        
+        def body(i, d):
+
+            # Calc distances
+            how_many = tf.constant([self.batch_size])
+            dupa = tf.reshape(tf.tile(embeddings[i, 0], how_many), [self.batch_size, -1])
+            cipa = tf.stack([embeddings[:, 0], dupa], axis=1)
+            nom = tf.map_fn(lambda x: tf.reduce_sum(tf.multiply(x[0], x[1])), cipa, dtype=tf.float32)
+            den = tf.multiply(tf.norm(embeddings[:, 0], axis=-1), tf.norm(dupa, axis=-1))
+            dist = 1 - nom / den
+
+            # Find hardes positive            
+            class_idxs = tf.where(labels == labels[i])          # All indexes within the same class
+            class_dist = tf.gather(dist, class_idxs)            # All distances within the same class
+            class_dmax = tf.argmax(class_dist)                  # Index of the biggest distance in the class_dist/class_idx 
+            posit_hard = tf.gather(class_idxs, class_dmax)      # Index of the biggest distance in the batch
+
+            return [tf.add(i, 1), tf.concat([d, d], axis=0)]
+        
+        # do the loop:
+        r = tf.while_loop(while_condition, body, [i0, d0], shape_invariants=[i0.get_shape(), tf.TensorShape([None, 1])])
 
     def _init_params(self):
         """
