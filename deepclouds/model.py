@@ -759,15 +759,15 @@ class DeepCloudsModel(GenericModel):
                 
         elif self.read_block_method == 'pointnet':
             self.params_conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=8, kernel_size = [1,3], scope='conv1')
-            self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
+            #self.params_conv_1_bn = tf_util.BatchNormVars(scope='convbc1')
             self.params_conv_2 = tf_util.Conv2DVars(num_in_channels=8, num_out_channels=32, kernel_size = [1,1], scope='conv2')
-            self.params_conv_2_bn = tf_util.BatchNormVars(scope='convbc2')
+            #self.params_conv_2_bn = tf_util.BatchNormVars(scope='convbc2')
             self.params_conv_3 = tf_util.Conv2DVars(num_in_channels=32, num_out_channels=128, kernel_size = [1,1], scope='conv3')
-            self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
+            #self.params_conv_3_bn = tf_util.BatchNormVars(scope='convbc3')
             self.params_conv_4 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=256, kernel_size = [1,1], scope='conv4')
-            self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
+            #self.params_conv_4_bn = tf_util.BatchNormVars(scope='convbc4')
             self.params_conv_5 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=self.read_block_units[-1]*2, kernel_size = [1,1], scope='conv5')
-            self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
+            #self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
 
         # Define process block params
         self.process_block_cells = []
@@ -780,15 +780,15 @@ class DeepCloudsModel(GenericModel):
         # Define input t-net-1 params
         if self.input_t_net:
             self.params_t1conv_1 = tf_util.Conv2DVars(num_in_channels=1, num_out_channels=64, kernel_size = [1,3], scope='t1con1')
-            self.params_t1conv_1_bn = tf_util.BatchNormVars(scope='t1convbc1')
+            #self.params_t1conv_1_bn = tf_util.BatchNormVars(scope='t1convbc1')
             self.params_t1conv_2 = tf_util.Conv2DVars(num_in_channels=64, num_out_channels=128, kernel_size = [1,1], scope='t1con2')
-            self.params_t1conv_2_bn = tf_util.BatchNormVars(scope='t1convbc2')
+            #self.params_t1conv_2_bn = tf_util.BatchNormVars(scope='t1convbc2')
             self.params_t1conv_3 = tf_util.Conv2DVars(num_in_channels=128, num_out_channels=1024, kernel_size = [1,1], scope='t1con3')
-            self.params_t1conv_3_bn = tf_util.BatchNormVars(scope='t1convbc3')
+            #self.params_t1conv_3_bn = tf_util.BatchNormVars(scope='t1convbc3')
             self.params_t1fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t1fc1')
-            self.params_t1fc1_bn = tf_util.BatchNormVars(scope='t1fc1bn')
+            #self.params_t1fc1_bn = tf_util.BatchNormVars(scope='t1fc1bn')
             self.params_t1fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t1fc2')
-            self.params_t1fc2_bn = tf_util.BatchNormVars(scope='t1fc2bn')
+            #self.params_t1fc2_bn = tf_util.BatchNormVars(scope='t1fc2bn')
  
             self.params_t1xyz_weights = tf.get_variable('t1weights', [256, 9], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
             self.params_t1xyz_biases = tf.get_variable('t1biases', initializer=np.array([1,0,0,0,1,0,0,0,1], dtype=np.float32))
@@ -796,15 +796,15 @@ class DeepCloudsModel(GenericModel):
         # Define input t-net-2 params
         if self.feature_t_net:
             self.params_t2conv_1 = tf_util.Conv2DVars(num_in_channels=2*self.read_block_units[-1], num_out_channels=256, kernel_size = [1,1], scope='t2con1')
-            self.params_t2conv_1_bn = tf_util.BatchNormVars(scope='t2convbc1')
+            #self.params_t2conv_1_bn = tf_util.BatchNormVars(scope='t2convbc1')
             self.params_t2conv_2 = tf_util.Conv2DVars(num_in_channels=256, num_out_channels=512, kernel_size = [1,1], scope='t2con2')
-            self.params_t2conv_2_bn = tf_util.BatchNormVars(scope='t2convbc2')
+            #self.params_t2conv_2_bn = tf_util.BatchNormVars(scope='t2convbc2')
             self.params_t2conv_3 = tf_util.Conv2DVars(num_in_channels=512, num_out_channels=1024, kernel_size = [1,1], scope='t2con3')
-            self.params_t2conv_3_bn = tf_util.BatchNormVars(scope='t2convbc3')
+            #self.params_t2conv_3_bn = tf_util.BatchNormVars(scope='t2convbc3')
             self.params_t2fc1 = tf_util.FullyConnVars(num_inputs=1024, num_outputs=512, scope='t2fc1')
-            self.params_t2fc1_bn = tf_util.BatchNormVars(scope='t2fc1bn')
+            #self.params_t2fc1_bn = tf_util.BatchNormVars(scope='t2fc1bn')
             self.params_t2fc2 = tf_util.FullyConnVars(num_inputs=512, num_outputs=256, scope='t2fc2')
-            self.params_t2fc2_bn = tf_util.BatchNormVars(scope='t2fc2bn')
+            #self.params_t2fc2_bn = tf_util.BatchNormVars(scope='t2fc2bn')
  
             K = 2*self.read_block_units[-1]
             self.params_t2xyz_weights = tf.get_variable('t2weights', [256, K*K], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
@@ -818,25 +818,25 @@ class DeepCloudsModel(GenericModel):
         num_point = input.get_shape()[1].value
 
         input_image = tf.expand_dims(input, -1)
-        net = tf_util.conv2d(input_image, self.params_t1conv_1, self.params_t1conv_1_bn,
+        net = tf_util.conv2d(input_image, self.params_t1conv_1, None,#self.params_t1conv_1_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_t1conv_2, self.params_t1conv_2_bn,
+        net = tf_util.conv2d(net, self.params_t1conv_2, None, #self.params_t1conv_2_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_t1conv_3, self.params_t1conv_3_bn,
+        net = tf_util.conv2d(net, self.params_t1conv_3, None, #self.params_t1conv_3_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
         net = tf_util.max_pool2d(net, [num_point,1], padding='VALID', scope='t1maxpool')
 
         net = tf.reshape(net, [batch_size, -1])
-        net = tf_util.fully_connected(net, self.params_t1fc1, self.params_t1fc1_bn,
+        net = tf_util.fully_connected(net, self.params_t1fc1, None, #self.params_t1fc1_bn,
                                       bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
-        net = tf_util.fully_connected(net, self.params_t1fc2, self.params_t1fc2_bn,
+        net = tf_util.fully_connected(net, self.params_t1fc2, None, #self.params_t1fc2_bn,
                                       bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
 
@@ -903,25 +903,25 @@ class DeepCloudsModel(GenericModel):
         num_point = input.get_shape()[1].value
     
         input_image = tf.expand_dims(input, -2)
-        net = tf_util.conv2d(input_image, self.params_t2conv_1, self.params_t2conv_1_bn,
+        net = tf_util.conv2d(input_image, self.params_t2conv_1, None, #self.params_t2conv_1_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_t2conv_2, self.params_t2conv_2_bn,
+        net = tf_util.conv2d(net, self.params_t2conv_2, None, #self.params_t2conv_2_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_t2conv_3, self.params_t2conv_3_bn,
+        net = tf_util.conv2d(net, self.params_t2conv_3, None, #self.params_t2conv_3_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
         net = tf_util.max_pool2d(net, [num_point,1], padding='VALID', scope='t2maxpool')
     
         net = tf.reshape(net, [batch_size, -1])
-        net = tf_util.fully_connected(net, self.params_t2fc1, self.params_t2fc1_bn, 
+        net = tf_util.fully_connected(net, self.params_t2fc1, None, #self.params_t2fc1_bn, 
                                       bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
-        net = tf_util.fully_connected(net, self.params_t1fc2, self.params_t1fc2_bn,
+        net = tf_util.fully_connected(net, self.params_t2fc2, None, #self.params_t1fc2_bn,
                                       bn=False, is_training=is_training,
                                       bn_decay=bn_decay)
     
@@ -1064,24 +1064,24 @@ class DeepCloudsModel(GenericModel):
         batch_size = input.get_shape()[0].value
         num_point = input.get_shape()[1].value
         input_image = tf.expand_dims(input, -1)
-        net = tf_util.conv2d(input_image, self.params_conv_1, self.params_conv_1_bn,
+        net = tf_util.conv2d(input_image, self.params_conv_1, None, #self.params_conv_1_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_conv_2, self.params_conv_2_bn,
+        net = tf_util.conv2d(net, self.params_conv_2, None, #self.params_conv_2_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
 #         #HERE FEATURE TRANSFORM?
-        net = tf_util.conv2d(net, self.params_conv_3, self.params_conv_3_bn,
+        net = tf_util.conv2d(net, self.params_conv_3, None, #self.params_conv_3_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_conv_4, self.params_conv_4_bn,
+        net = tf_util.conv2d(net, self.params_conv_4, None, #self.params_conv_4_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)
-        net = tf_util.conv2d(net, self.params_conv_5, self.params_conv_5_bn,
+        net = tf_util.conv2d(net, self.params_conv_5, None, #self.params_conv_5_bn,
                              padding='VALID', stride=[1,1],
                              bn=False, is_training=is_training,
                              bn_decay=bn_decay)

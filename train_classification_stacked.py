@@ -15,17 +15,18 @@ import train_with_hparam
 import deepclouds.defines as df
 import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
-from deepclouds.model import OrderMattersModel
+from deepclouds.model import DeepCloudsModel
 
 SAMPLES = 5
 CLOUD_SIZE = 128
-SAMPLING_METHOD = 'via_graphs'
+SAMPLING_METHOD = 'random'
 CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
+READ_BLOCK_UNITS = [256]
 
 def train_classification_stacked(name, batch_size, epochs, learning_rate, device,
                                  read_block_units, process_block_steps,
-                                 classifier_layers = [2048, 1024, 512, 256, 128, 40]):
+                                 classifier_layers = [1024, 512, 256, 128, 40]):
                                  #classifier_layers = [10240, 2560, 640, 160, 40]):
     """
     Train deepclouds classificator with synthetic data.
@@ -44,11 +45,15 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
 
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
-            features_model = OrderMattersModel(train=False,
-                                               batch_size = batch_size,
-                                               pointcloud_size = CLOUD_SIZE,
-                                               read_block_units = read_block_units,
-                                               process_block_steps=process_block_steps)
+            features_model = DeepCloudsModel(train=False,
+                                             batch_size = batch_size,
+                                             pointcloud_size = CLOUD_SIZE,
+                                             read_block_units = READ_BLOCK_UNITS,
+                                             process_block_steps=process_block_steps,
+                                             normalize_embedding=True, verbose=True,
+                                             input_t_net=True, feature_t_net=True,
+                                             read_block_method='pointnet',
+                                             distance='cosine')
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
             features_model_saver = tf.train.Saver(features_vars)
@@ -77,7 +82,7 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
         ##############################################################################################
 
         sess.run(tf.global_variables_initializer())
-        features_model_saver.restore(sess, tf.train.latest_checkpoint('100_classification_128_points_up_modelnet'))
+        features_model_saver.restore(sess, tf.train.latest_checkpoint('models_temp'))
         if CLASSIFIER_MODEL_LOAD:
             classifier_model_saver.restore(sess, tf.train.latest_checkpoint('models_classifier'))
 
@@ -132,6 +137,7 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                     embeddings = np.stack(embeddings, axis=1)
                     #embeddings = np.reshape(embeddings, (embeddings.shape[0], -1))
                     embeddings = np.mean(embeddings, axis=1)
+                    embeddings = np.squeeze(embeddings, axis=1)
     
                     ##################################################################################################
                     ############################################# TRAIN ##############################################
@@ -186,6 +192,7 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
     
                     embeddings = np.stack(embeddings, axis=1)
                     embeddings = np.mean(embeddings, axis=1)
+                    embeddings = np.squeeze(embeddings, axis=1)
                     #embeddings = np.reshape(embeddings, (embeddings.shape[0], -1))
                         
                     # One hot
@@ -221,7 +228,8 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                     # Save model
                     save_path = classifier_model.save_model(sess, name)
                     print "Model saved in file: %s" % save_path
-                    print "MAX ACC = ", np.max(accuracies) 
+                    print "MAX  ACC = ", np.max(accuracies)
+                    print "MEAN ACC = ", np.mean(accuracies)  
 
         else:
             accuracies = []
@@ -254,7 +262,8 @@ def train_classification_stacked(name, batch_size, epochs, learning_rate, device
                                                    feed_dict={features_model.placeholder_embdg: embedding_input})
                         embeddings.append(embeddings_sample)
                     embeddings = np.stack(embeddings, axis=1)
-                    embeddings = np.sum(embeddings, axis=1)
+                    embeddings = np.mean(embeddings, axis=1)
+                    embeddings = np.squeeze(embeddings, axis=1)
                         
                     # One hot
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
