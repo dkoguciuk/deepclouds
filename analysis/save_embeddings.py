@@ -20,9 +20,12 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 16
-SYNTHETIC = True
-SAMPLING_METHOD = 'via_graphs'
+CLOUD_SIZE = 1024
+SYNTHETIC = False
+SAMPLING_METHOD = 'random'
+READ_BLOCK_UNITS = [256]
+DISTANCE = 'cosine'
+READ_BLOCK_METHOD = 'pointnet'
 
 def save_embeddings(device):
 
@@ -30,8 +33,8 @@ def save_embeddings(device):
     tf.reset_default_graph()
 
     # Generate data if needed
-    data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
-    #data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
+    #data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE)
+    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -40,11 +43,12 @@ def save_embeddings(device):
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             features_model = DeepCloudsModel(train=False,
-                                               batch_size = 40,
-                                               pointcloud_size = CLOUD_SIZE,
-                                               read_block_units = [32],
-                                               process_block_steps=[4],
-                                               t_net=True)
+                                             batch_size = 40,
+                                             pointcloud_size = CLOUD_SIZE,
+                                             read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
+                                             normalize_embedding=True, verbose=True,
+                                             input_t_net=True, feature_t_net=True,
+                                             distance=DISTANCE, read_block_method=READ_BLOCK_METHOD)
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
             features_model_saver = tf.train.Saver(features_vars)
@@ -66,11 +70,11 @@ def save_embeddings(device):
         # saver    
         saver.restore(sess, tf.train.latest_checkpoint('models'))
         
-#         variables_names = [v.name for v in tf.trainable_variables()]
-#         values = sess.run(variables_names)
-#         for k, v in zip(variables_names, values):
-#             print "Variable: ", k
-#             print "Shape: ", v.shape
+        variables_names = [v.name for v in tf.trainable_variables()]
+        values = sess.run(variables_names)
+        for k, v in zip(variables_names, values):
+            print "Variable: ", k
+            print "Shape: ", v.shape
         
         # Do the training loop
         global_batch_idx = 1

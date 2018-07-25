@@ -22,17 +22,19 @@ from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
 
-CLOUD_SIZE = 128
+CLOUD_SIZE = 1024
 DISTANCE = 'cosine'
-SAMPLING_METHOD = 'random'
+SAMPLING_METHOD = 'fps'
 LOAD_MODEL = False
 CALC_DIST = True
 SYNTHETIC = False
 READ_BLOCK_UNITS = [256]
-ROTATE_CLOUDS_UP = False
+ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
-checkpoint_skip_epochs = 50
+checkpoint_skip_epochs = 25
 READ_BLOCK_METHOD = 'pointnet'
+PROCESS_BLOCK_METHOD = 'attention-rnn'
+#PROCESS_BLOCK_METHOD = 'max-pool'
 
 def plot_bar(e):
     bins = 64
@@ -102,8 +104,9 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
                                     input_t_net=True, feature_t_net=True,
-                                    distance=DISTANCE, read_block_method=READ_BLOCK_METHOD)
-
+                                    distance=DISTANCE, read_block_method=READ_BLOCK_METHOD,
+                                    process_block_method=PROCESS_BLOCK_METHOD)
+                                      
     # PRINT PARAM NO
 #    total_parameters = 0
 #    for variable in tf.trainable_variables():

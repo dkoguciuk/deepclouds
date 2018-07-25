@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn import decomposition
 
-READ_BLOCK_SIZE = 32
 
 def main(argv):
 
@@ -64,7 +63,7 @@ def main(argv):
         
     # t-SNE decomposition
     skip = class_embeddings.shape[1]
-    dec_features = class_embeddings.reshape(-1, READ_BLOCK_SIZE*4)
+    dec_features = class_embeddings.reshape(-1, class_embeddings.shape[-1])
     dec_labels = []
     for class_idx in range(40):
         for instance_idx in range(10):
@@ -89,11 +88,12 @@ def main(argv):
 #     print "t-SNE features calculated in ", tsne_time - pca_time, " seconds "
     # plots
     
-#    plt.figure(figsize=(15, 15))
-#    print(features_pca.shape)
-#    plt.scatter(features[0][:, 0], features[0][:, 1], c='red')
-    #plt.scatter(feature_2[:, 0], feature_2[:, 1], c='blue')
-    #plt.scatter(feature_3[:, 0], feature_3[:, 1], c='orange')
+    for idx in range(1, 10):
+    
+        plt.figure(figsize=(15, 15))
+        plt.scatter(features[0][:, 0], features[0][:, 1], c='red')
+        plt.scatter(features[7][:, 0], features[7][:, 1], c='blue')
+    #plt.scatter(features[2][:, 0], features[2][:, 1], c='orange')
     #plt.scatter(feature_4[:, 0], feature_4[:, 1], c='magenta')
     #plt.scatter(feature_4[:, 0], feature_4[:, 1], c='gray')
     #plt.scatter(feature_5[:, 0], feature_5[:, 1], c='tan')
@@ -112,7 +112,10 @@ def main(argv):
     #plt.scatter(features_pca[:, 0], features_pca[:, 1], c=dec_labels)
 #     plt.figure(figsize=(15, 15))
 #     plt.scatter(features_tsne[:, 0], features_tsne[:, 1], c=dec_labels)
-    #plt.show()
+        plt.ylim(-1, 1)
+        plt.xlim(-1, 1)
+        plt.show()
+        break
     
     print("AVERAGE POS DIST = ", np.mean(pos_man))
     print("AVERAGE NEG DIST = ", np.mean(neg_man))

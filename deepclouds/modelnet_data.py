@@ -306,7 +306,7 @@ class ModelnetData(GenericData) :
                                       jitter_points=False,
                                       rotate_pointclouds=False,
                                       rotate_pointclouds_up=False,
-                                      sampling_method='random',
+                                      sampling_method='fps',
                                       reshape_flags=[]):
         """
         Take pointclouds with at least instances_number of each class.
@@ -381,6 +381,8 @@ class ModelnetData(GenericData) :
                             batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
                         elif sampling_method == 'via_graphs':
                             batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
+                        elif sampling_method == 'fps':
+                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
                     batch_clouds = np.stack(batch_clouds_resized, axis=0)
                     batch_clouds = np.stack([batch_clouds_resized], axis=1)
 
@@ -469,6 +471,8 @@ class ModelnetData(GenericData) :
                             batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
                         elif sampling_method == 'via_graphs':
                             batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
+                        elif sampling_method == 'fps':
+                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
                     batch_clouds = np.stack(batch_clouds_resized, axis=0)
                     batch_clouds = np.stack([batch_clouds], axis=1)
 
@@ -561,6 +565,8 @@ class ModelnetData(GenericData) :
                                 batch_clouds_resized_instance.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
                             elif sampling_method == 'via_graphs':
                                 batch_clouds_resized_instance.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
+                            elif sampling_method == 'fps':
+                                batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
                         batch_clouds_resized.append(batch_clouds_resized_instance)
                     batch_clouds = np.stack(batch_clouds_resized, axis=0)
 #                    if self.pointcloud_size < 2048:

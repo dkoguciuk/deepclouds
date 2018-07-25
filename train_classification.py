@@ -17,18 +17,21 @@ import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
-CLOUD_SIZE = 64
+CLOUD_SIZE = 1024
 CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
-SAMPLING_METHOD = 'random'
-SYNTHETIC = True
-READ_BLOCK_UNITS = [128]
+SYNTHETIC = False
+READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
+READ_BLOCK_METHOD = 'pointnet'
+PROCESS_BLOCK_METHOD = 'max-pool'
+#PROCESS_BLOCK_METHOD = 'attention-rnn'
+SAMPLING_METHOD = 'random'
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [512, 256, 128, 40]):
+                         classifier_layers = [1024, 512, 256, 128, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -56,7 +59,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                              process_block_steps=process_block_steps,
                                              normalize_embedding=True, verbose=True,
                                              input_t_net=True, feature_t_net=True,
-                                             read_block_method='pointnet',
+                                             read_block_method=READ_BLOCK_METHOD,
+                                             process_block_method=PROCESS_BLOCK_METHOD,
                                              distance='cosine')
             
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
@@ -214,16 +218,21 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             accuracies = []
             global_votes = []
             global_labels = []
-            for _ in range(10):
+            for _ in range(1):
                 # Get test embeddings
-                hit = 0.
-                all = 0.
-                test_batch_size = 2
+                hit = {i : 0. for i in range(40)}
+                all = {i : 0. for i in range(40)}
+                test_batch_size = 8
                 batch_votes = []
                 batch_labels = []
+                sys.stdout.write("Classify modelnet")
+                sys.stdout.flush()
                 for clouds, labels in data_gen.generate_random_batch(False, batch_size=test_batch_size,
                                                                      shuffle_points=False,
                                                                      rotate_pointclouds_up=False):# 400 test examples / 16 clouds = 25 batches
+                    
+                    sys.stdout.write(".")
+                    sys.stdout.flush()
                     
                     # padding
                     clouds_padding = np.zeros((batch_size - test_batch_size, CLOUD_SIZE, 3), dtype=np.float)
@@ -238,6 +247,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                                           features_model.placeholder_is_tr : False})
                         
                     # One hot
+                    embeddings = np.squeeze(embeddings)
                     labels_padded_one_hot = sess.run(tf.one_hot(labels_padded, 40))
                     predictions = sess.run(classifier_model.get_classification_prediction(),
                                            feed_dict={classifier_model.placeholder_embed: embeddings,
@@ -246,13 +256,31 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     # accuracy 
                     predictions_args = np.argmax(predictions, axis=1)
                     predictions_args = predictions_args[:len(labels)]
-                    hit = hit + sum(predictions_args == labels)
-                    all = all + len(labels)
+                    for cloud_idx in range(len(clouds)):
+                        hit[labels[cloud_idx]] = hit[labels[cloud_idx]] + (predictions_args[cloud_idx] == labels[cloud_idx])
+                        all[labels[cloud_idx]] = all[labels[cloud_idx]] + 1
+                    #hit = hit + sum(predictions_args == labels)
+                    #all = all + len(labels)
                     for idx in range(len(labels)):
                         batch_votes.append(predictions[idx])
                         batch_labels.append(labels[idx])
             
-                print "Accuracy: ", hit/all        
+                
+                asd_best = []
+                asd_all = []
+                print "\n"
+                for cloud_idx in range(40):
+                    print "Accuracy: ", cloud_idx, "  :  ", hit[cloud_idx]/all[cloud_idx]
+                    asd_all.append(hit[cloud_idx]/all[cloud_idx])
+                    if cloud_idx not in [3, 15, 32, 33, 38, 39]:
+                        asd_best.append(hit[cloud_idx]/all[cloud_idx])
+                
+                print "ALL      :", np.mean(asd_all)
+                print "BEST ONLY:", np.mean(asd_best)
+                print "ACCURACY :", np.sum(hit.values())/np.sum(all.values())
+                print "AVG CLASS ACCURACY :", np.mean(np.array(hit.values(),np.float32)/np.array(all.values(), np.float32))
+                    
+                exit()        
                 accuracies.append(hit / all)
                 global_votes.append(batch_votes)
                 print "GLOBALVOTES", len(global_votes), len(global_votes[0])

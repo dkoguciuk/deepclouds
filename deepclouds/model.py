@@ -558,6 +558,7 @@ class DeepCloudsModel(GenericModel):
                  learning_rate=0.0001, gradient_clip=10.0,
                  input_t_net=False, feature_t_net=False,
                  read_block_method='birnn', #birnn or pointnet
+                 process_block_method='max-pool', #max-pool or attention-rnn
                  distance='cosine'):
         """
         Build a model.
@@ -590,6 +591,7 @@ class DeepCloudsModel(GenericModel):
         self.input_t_net = input_t_net
         self.feature_t_net = feature_t_net
         self.read_block_method = read_block_method
+        self.process_block_method = process_block_method
         
         # Variable decays
         self.global_step = tf.Variable(1, trainable=False, name='global_step')
@@ -653,7 +655,7 @@ class DeepCloudsModel(GenericModel):
 
             # Process block
             with tf.name_scope("process_block"):
-                self.cloud_embedding_embdg = self._define_process_block(self.memory_vector_embdg)
+                self.cloud_embedding_embdg = self._define_process_block(self.memory_vector_embdg, self.process_block_method)
                 if self.normalize_embedding:
                     self.cloud_embedding_embdg = tf.nn.l2_normalize(self.cloud_embedding_embdg, axis=-1, epsilon=1e-10)
         
@@ -682,7 +684,7 @@ class DeepCloudsModel(GenericModel):
 
                 # Process block
                 with tf.name_scope("process_block"):
-                    self.cloud_embedding_train = self._define_process_block(self.memory_vector_train)
+                    self.cloud_embedding_train = self._define_process_block(self.memory_vector_train, self.process_block_method)
                     if self.normalize_embedding:
                         self.cloud_embedding_train = tf.nn.l2_normalize(self.cloud_embedding_train, axis=-1, epsilon=1e-10)
 
@@ -770,12 +772,13 @@ class DeepCloudsModel(GenericModel):
             #self.params_conv_5_bn = tf_util.BatchNormVars(scope='convbc5')
 
         # Define process block params
-        self.process_block_cells = []
-        self.process_block_state_starts = []
-        for layer_idx in range(len(self.process_block_steps)):
-            self.process_block_cells.append(MyLSTMCell(num_units = self.read_block_units[-1]*4,
-                                                       num_out = self.read_block_units[-1]*2, name = 'process_layer_' + str(layer_idx)))
-            self.process_block_state_starts.append(self.process_block_cells[-1].zero_state(self.batch_size, tf.float32))
+        if self.process_block_method == 'attention-rnn':
+            self.process_block_cells = []
+            self.process_block_state_starts = []
+            for layer_idx in range(len(self.process_block_steps)):
+                self.process_block_cells.append(MyLSTMCell(num_units = self.read_block_units[-1]*4,
+                                                           num_out = self.read_block_units[-1]*2, name = 'process_layer_' + str(layer_idx)))
+                self.process_block_state_starts.append(self.process_block_cells[-1].zero_state(self.batch_size, tf.float32))
 
         # Define input t-net-1 params
         if self.input_t_net:
@@ -1200,7 +1203,31 @@ class DeepCloudsModel(GenericModel):
         ret = tf.reshape(ret, (ret.shape[0], 1, -1))
         return ret  
 
-    def _define_process_block(self, input):
+    def max_pool2d(self, inputs,
+                   kernel_size,
+                   stride=[2, 2],
+                   padding='VALID'):
+      """ 2D max pooling.
+
+      Args:
+          inputs: 4-D tensor BxHxWxC
+          kernel_size: a list of 2 ints
+          stride: a list of 2 ints
+  
+      Returns:
+          Variable tensor
+      """
+#      with tf.variable_scope(scope) as sc:
+      kernel_h, kernel_w = kernel_size
+      stride_h, stride_w = stride
+      outputs = tf.nn.max_pool(inputs,
+                                   ksize=[1, kernel_h, kernel_w, 1],
+                                   strides=[1, stride_h, stride_w, 1],
+                                   padding=padding)
+#                                   name=sc.name)
+      return outputs
+
+    def _define_process_block(self, input, method):
         """
         Calculate forward propagation of a RNN.
 
@@ -1226,8 +1253,10 @@ class DeepCloudsModel(GenericModel):
                     sys.stdout.write("Defining process block for embedding")
                     sys.stdout.flush()
 
-                ret = self._define_process_block_inner(inputs[0])
-
+                if method == 'attention-rnn':
+                    ret = self._define_process_block_inner(inputs[0])
+                if method == 'max-pool':
+                    ret = tf.squeeze(self.max_pool2d(tf.expand_dims(inputs[0], axis=-2), kernel_size=[inputs[0].shape[1], 1]), axis=-2)
                 if self.verbose:
                     print "OK!"         
 
@@ -1237,19 +1266,29 @@ class DeepCloudsModel(GenericModel):
                     sys.stdout.write("Defining process block for anchor")
                     sys.stdout.flush()
 
-                anchor_ret = self._define_process_block_inner(inputs[0])
+
+                if method == 'attention-rnn':
+                    anchor_ret = self._define_process_block_inner(inputs[0])
+                if method == 'max-pool':
+                    anchor_ret = tf.squeeze(self.max_pool2d(tf.expand_dims(inputs[0], axis=-2), kernel_size=[inputs[0].shape[1], 1]), axis=-2)
 
                 if self.verbose:
                     sys.stdout.write("OK!\nDefining process block for positive")
                     sys.stdout.flush()
 
-                positive_ret = self._define_process_block_inner(inputs[1])
+                if method == 'attention-rnn':
+                    positive_ret = self._define_process_block_inner(inputs[1])
+                if method == 'max-pool':
+                    positive_ret = tf.squeeze(self.max_pool2d(tf.expand_dims(inputs[1], axis=-2), kernel_size=[inputs[1].shape[1], 1]), axis=-2)
 
                 if self.verbose:
                     sys.stdout.write("OK!\nDefining process block for negative")
                     sys.stdout.flush()
 
-                negative_ret = self._define_process_block_inner(inputs[2])
+                if method == 'attention-rnn':
+                    negative_ret = self._define_process_block_inner(inputs[2])
+                if method == 'max-pool':
+                    negative_ret = tf.squeeze(self.max_pool2d(tf.expand_dims(inputs[2], axis=-2), kernel_size=[inputs[2].shape[1], 1]), axis=-2)
 
                 if self.verbose:
                     print "OK!"
