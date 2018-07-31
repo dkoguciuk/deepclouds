@@ -388,15 +388,15 @@ class ModelnetData(GenericData) :
 
                 # shuffle points
                 if shuffle_points:
-                    batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
+                    batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
                 # jitter
                 if jitter_points:
-                    batch_clouds = SyntheticData._jitter_batch(batch_clouds)
+                    batch_clouds = ModelnetData._jitter_batch(batch_clouds)
                 # rotate
                 if rotate_pointclouds:
-                    batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+                    batch_clouds = ModelnetData._rotate_batch(batch_clouds)
                 elif rotate_pointclouds_up:
-                    batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
+                    batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
                 # reshape
                 if "flatten_pointclouds" in reshape_flags:
                     shape = batch_clouds.shape
@@ -478,15 +478,15 @@ class ModelnetData(GenericData) :
 
                 # shuffle points
                 if shuffle_points:
-                    batch_clouds = SyntheticData._shuffle_points_in_batch(batch_clouds)
+                    batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
                 # jitter
                 if jitter_points:
-                    batch_clouds = SyntheticData._jitter_batch(batch_clouds)
+                    batch_clouds = ModelnetData._jitter_batch(batch_clouds)
                 # rotate
                 if rotate_pointclouds:
-                    batch_clouds = SyntheticData._rotate_batch(batch_clouds)
+                    batch_clouds = ModelnetData._rotate_batch(batch_clouds)
                 elif rotate_pointclouds_up:
-                    batch_clouds = SyntheticData._rotate_batch(batch_clouds, random_axis=False)
+                    batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
                 # reshape
                 if "flatten_pointclouds" in reshape_flags:
                     shape = batch_clouds.shape

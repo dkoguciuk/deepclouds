@@ -25,7 +25,7 @@ from deepclouds.model import DeepCloudsModel
 CLOUD_SIZE = 1024
 DISTANCE = 'cosine'
 SAMPLING_METHOD = 'fps'
-LOAD_MODEL = False
+LOAD_MODEL = True
 CALC_DIST = True
 SYNTHETIC = False
 READ_BLOCK_UNITS = [256]
@@ -33,8 +33,8 @@ ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
 checkpoint_skip_epochs = 25
 READ_BLOCK_METHOD = 'pointnet'
-PROCESS_BLOCK_METHOD = 'attention-rnn'
-#PROCESS_BLOCK_METHOD = 'max-pool'
+#PROCESS_BLOCK_METHOD = 'attention-rnn'
+PROCESS_BLOCK_METHOD = 'max-pool'
 
 def plot_bar(e):
     bins = 64
@@ -140,8 +140,8 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
         sess.run(tf.global_variables_initializer()) 
         
         if LOAD_MODEL:
-            #features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
-            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_temp'))
+            features_model_saver.restore(sess, tf.train.latest_checkpoint('models_feature_extractor'))
+            #features_model_saver.restore(sess, tf.train.latest_checkpoint('models_temp'))
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
