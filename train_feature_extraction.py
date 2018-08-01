@@ -25,7 +25,7 @@ from deepclouds.model import DeepCloudsModel
 CLOUD_SIZE = 1024
 DISTANCE = 'cosine'
 SAMPLING_METHOD = 'fps'
-LOAD_MODEL = True
+LOAD_MODEL = False
 CALC_DIST = True
 SYNTHETIC = False
 READ_BLOCK_UNITS = [256]
@@ -35,6 +35,7 @@ checkpoint_skip_epochs = 25
 READ_BLOCK_METHOD = 'pointnet'
 #PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
+INSTANCES_NUMBER = 5
 
 def plot_bar(e):
     bins = 64
@@ -99,7 +100,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             model = DeepCloudsModel(train=True,
-                                    batch_size=batch_size, pointcloud_size=CLOUD_SIZE,
+                                    batch_size=40, pointcloud_size=CLOUD_SIZE,
                                     read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
@@ -156,7 +157,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
  
         # Do the training loop
         non_zeros = []
-        summary_skip_batch = 100  # one epoch on modelnet
+        summary_skip_batch = 10
         for epoch in range(epochs):
  
             time_0 = timer()
@@ -164,7 +165,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
             # loop for all batches
             epoch_batch_idx = 0
             for clouds, labels in data_gen.generate_representative_batch(train=True,
-                                                                         instances_number=2,
+                                                                         instances_number=INSTANCES_NUMBER,
                                                                          shuffle_points=SHUFFLE_CLOUDS,
                                                                          jitter_points=True,
                                                                          rotate_pointclouds=False,
@@ -178,13 +179,16 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 ##################################################################################################
                  
                 # count embeddings
-                embedding_input = np.stack([clouds], axis=1)
-                embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input,
-                                                                         model.margin : [margin],
-                                                                         model.placeholder_is_tr : True})
-                
+                embeddings = []
+                embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
+                for embedding_input in embedding_inputs:
+                    embedding_input = np.expand_dims(embedding_input, axis=1)         
+                    embeddings.append(sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input,
+                                                                                  model.margin : [margin],
+                                                                                  model.placeholder_is_tr : True}))
+                embeddings = np.concatenate(embeddings)
+
                 # time_2 = timer()
-                
                  
                 # Find hard examples to train on
                 pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
@@ -194,7 +198,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 pos_clouds = pos_clouds[pos_indices, ...]
                 neg_clouds = np.copy(clouds)
                 neg_clouds = neg_clouds[neg_indices, ...]
-                training_input = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
+                training_inputs = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
                 
                 # time_3 = timer()
 
@@ -226,18 +230,24 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
 
  
                 # run optimizer
-                global_batch_idx, _, loss, summary_train, non_zero = sess.run([model.global_step, model.get_optimizer(), model.get_loss_function(),
-                                                             model.get_summary(), model.non_zero_triplets],
-                                                             feed_dict={model.placeholder_train: training_input,
-                                                                        model.margin : [margin],
-                                                                        model.placeholder_is_tr : True})
- 
+                training_losses = []
+                training_non_zeros = []
+                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
+                for training_input in training_inputs:
+                    global_batch_idx, _, training_loss, summary_train, training_non_zero = sess.run(
+                        [model.global_step, model.get_optimizer(), model.get_loss_function(),
+                         model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
+                                                                                   model.margin : [margin],
+                                                                                   model.placeholder_is_tr : True})
+                    training_losses.append(training_loss)
+                    training_non_zeros.append(training_non_zero)
+
                 ##################################################################################################
                 ############################## GET POS-NEG DIST DIFF ON TEST SET #################################
                 ##################################################################################################
  
-                if global_batch_idx % summary_skip_batch == summary_skip_batch - 1:
-                    
+                if global_batch_idx % (summary_skip_batch*INSTANCES_NUMBER) == 1:
+
                     # pos/neg dist
                     if CALC_DIST:
                         pos_man, neg_man = test_features_extraction(data_gen, model, sess, partial_score=synthetic)
@@ -250,20 +260,20 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                       
                     # Variables histogram
                     summary_histograms = sess.run(hist_summary)
-                    writer.add_summary(summary_histograms, global_batch_idx)
-                      
+                    writer.add_summary(summary_histograms, global_batch_idx)             
+   
                     # Add summary
                     summary_test = tf.Summary()
                     if CALC_DIST:
                         summary_test.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
                     summary_test.value.add(tag="%smargin" % "", simple_value=margin)
-                    summary_test.value.add(tag="%snon_zero" % "", simple_value=non_zero)
+                    summary_test.value.add(tag="%snon_zero" % "", simple_value=np.mean(training_non_zeros))
                     writer.add_summary(summary_test, global_batch_idx)
                     writer.add_summary(summary_train, global_batch_idx)
                     if CALC_DIST:
-                        print "Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, epoch_batch_idx, loss, neg_man - pos_man, non_zero, margin, learning_rate)
+                        print "Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, epoch_batch_idx, np.mean(training_losses), neg_man - pos_man, np.mean(training_non_zeros), margin, learning_rate)
                     else:
-                        print "Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, epoch_batch_idx, loss, non_zero, margin, learning_rate)
+                        print "Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, epoch_batch_idx, np.mean(training_losses), np.mean(training_non_zeros), margin, learning_rate)
                     
                     # time_6 = timer()
                     # print "generator    : ", (time_1 - time_0)
@@ -293,8 +303,7 @@ def test_features_extraction(data_gen, model, sess, partial_score=True):
     # Get test embeddings
     batches = 0
     test_embeddings = { k : [] for k in range(40)}
-    for clouds, labels in data_gen.generate_random_batch(False, 80, shuffle_files=True,
-                                                         sampling_method=SAMPLING_METHOD):  # 400 test examples / 80 clouds = 5 batches
+    for clouds, labels in data_gen.generate_random_batch(False, 40, sampling_method=SAMPLING_METHOD):  # 400 test examples / 80 clouds = 5 batches
 
         # count embeddings
         test_embedding_input = np.stack([clouds], axis=1)

@@ -109,10 +109,10 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 
         if CLASSIFIER_MODEL_TRAIN:
 
+            accuracies = []
             global_batch_idx = 1
             checkpoint_skip_epochs = 25
-            accuracies = []
-            epoch = 0
+            for epoch in range(epochs):
 
                 ##########################################################################################
                 ##################################### BATCH TRAINING LOOP ################################
@@ -146,6 +146,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                                        classifier_model.get_loss_function(),
                                                        classifier_model.get_summary()],
                                                        feed_dict={classifier_model.placeholder_embed: embeddings,
+                                                                  classifier_model.placeholder_label: new_labels})
 
 
                     global_batch_idx += 1
@@ -198,7 +199,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 for clouds, labels in data_gen.generate_random_batch(False, batch_size=test_batch_size,
                                                                      shuffle_points=False,
                                                                      rotate_pointclouds_up=False):# 400 test examples / 16 clouds = 25 batches
-
+                    
                     sys.stdout.write(".")
                     sys.stdout.flush()
 
@@ -221,7 +222,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                                            feed_dict={classifier_model.placeholder_embed: embeddings,
                                                       classifier_model.placeholder_label: labels_padded_one_hot})
 
-                    # accuracy
+                    # accuracy 
                     predictions_args = np.argmax(predictions, axis=1)
                     predictions_args = predictions_args[:len(labels)]
                     for cloud_idx in range(len(clouds)):
@@ -232,7 +233,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     for idx in range(len(labels)):
                         batch_votes.append(predictions[idx])
                         batch_labels.append(labels[idx])
-
+    
                 asd_best = []
                 asd_all = []
                 print "\n"
@@ -240,14 +241,14 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     print "Accuracy: ", cloud_idx, "  :  ", hit[cloud_idx]/all[cloud_idx]
                     asd_all.append(hit[cloud_idx]/all[cloud_idx])
                     if cloud_idx not in [3, 15, 32, 33, 38, 39]:
-                asd_best.append(hit[cloud_idx]/all[cloud_idx])
+                        asd_best.append(hit[cloud_idx]/all[cloud_idx])
 
                 print "ALL      :", np.mean(asd_all)
                 print "BEST ONLY:", np.mean(asd_best)
                 print "ACCURACY :", np.sum(hit.values())/np.sum(all.values())
                 print "AVG CLASS ACCURACY :", np.mean(np.array(hit.values(),np.float32)/np.array(all.values(), np.float32))
 
-                exit()
+                exit()        
                 accuracies.append(hit / all)
                 global_votes.append(batch_votes)
                 print "GLOBALVOTES", len(global_votes), len(global_votes[0])

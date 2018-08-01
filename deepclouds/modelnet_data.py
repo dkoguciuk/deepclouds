@@ -219,95 +219,30 @@ class ModelnetData(GenericData) :
             os.system('mv %s %s' % (zipfile[:-4], df.DATA_DIR))
             os.system('rm %s' % (zipfile))
             print "Modelnet database downloading completed..."
+        # merge training data
+        train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
+        train_data = [ModelnetData._load_h5_file(train_file) for train_file in train_files]
+        pointclouds_train, labels_train = zip(*train_data)
+        self.pointclouds_train = np.concatenate(pointclouds_train, axis=0)
+        self.labels_train = np.concatenate(labels_train, axis=0)
+        # merge test data
+        test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
+        test_data = [ModelnetData._load_h5_file(test_file) for test_file in test_files]
+        pointclouds_test, labels_test = zip(*test_data)
+        self.pointclouds_test = np.concatenate(pointclouds_test, axis=0)
+        self.labels_test = np.concatenate(labels_test, axis=0)
         # internal vars
-        self.train_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "train_files.txt"))]
-        self.test_files = [os.path.join(df.ROOT_DIR, elem) for elem in ModelnetData._get_filenames(os.path.join(df.DATA_MODELNET_DIR, "test_files.txt"))]
         self.pointcloud_size = pointcloud_size
-
-    def generate_random_tripples(self, batch_size,
-                                 shuffle_files=False, shuffle_pointclouds=False,
-                                 jitter_pointclouds=False, rotate_pointclouds_up=False,
-                                 rotate_pointclouds_rand=False, reshape_flags=[]):
-        """ 
-        Generator returns 3 point clouds A (anchor), P (positive), N (negative).
-    
-        Args:
-            batch_size (int): Batch size we would split the dataset into (numer of triples
-                to be returned by the generator).
-            shuffle_files (boolean): Should we shuffle train files?
-            shuffle_pointclouds (boolean): Should we shuffle pointclouds for each file?
-            jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
-            rotate_pointclouds_up (boolean): Rotate pointclouds with random angle around up axis,
-                but this axis has to contain (0,0) point.
-            rotate_pointclouds_rand (boolean): Rotate pointclouds with random angle around
-                random axis, but this axis has to contain (0,0) point.
-            reshape_flags (list of str): Output pointclouds are in the default shape of
-                [batch_size, pointcloud_size, 3]. One can specify some reshape flags here:
-                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
-                    would be [batch_size, N*3]
-                transpose_pointclouds --  transpose flatten pointclouds to be shape of
-                    [N*3, batch_size], this flag could be specified only with flatten_pointclouds.
-        Returns:
-            tuple(A, P, N): where:
-                A - random permutation of next cloud
-                P - another random permutation of the same cloud
-                N - random permutation of cloud from another class
-        """
-        raise NotImplemented("For a long time this class was not tested!")
-
-        # shuffle train files
-        train_file_idxs = np.arange(0, len(self.train_files))
-        if shuffle_files:
-            np.random.shuffle(train_file_idxs)
-
-        # iterate over all files
-        for idx in range(len(self.train_files)):
-            # load pointclouds
-            pointclouds, labels = ModelnetData._load_h5_file(self.train_files[train_file_idxs[idx]])
-            # shuffle pointclouds
-            if shuffle_pointclouds:
-                pointclouds, labels, _ = ModelnetData._shuffle_data_with_labels(pointclouds, labels)
-            # iterate over all batches
-            for batch_idx in range(int(math.floor(pointclouds.shape[0] / batch_size))):
-                # get A, P, N
-                A = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
-                P = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
-                N = np.empty([batch_size, pointclouds.shape[1], pointclouds.shape[2]])
-                for cloud_idx in range(batch_size):
-                    global_idx = batch_idx * batch_size + cloud_idx
-                    other_cloud_idx = ModelnetData._find_index_of_another_class(pointclouds, labels, global_idx)
-                    A[cloud_idx] = ModelnetData._shuffle_data(pointclouds[global_idx])
-                    P[cloud_idx] = ModelnetData._shuffle_data(pointclouds[global_idx])
-                    N[cloud_idx] = ModelnetData._shuffle_data(pointclouds[other_cloud_idx])
-                batch_data = (A, P, N)
-
-                # jitter
-                if jitter_pointclouds:
-                    batch_data = ModelnetData._jitter_pointclouds_tuples(batch_data)
-                # rotate
-                if rotate_pointclouds_up:
-                    batch_data = ModelnetData._rotate_pointclouds_up(batch_data)
-                # reshape
-                if "flatten_pointclouds" in reshape_flags:
-                    batch_data = (np.reshape(A, [batch_size, -1]),
-                                  np.reshape(P, [batch_size, -1]),
-                                  np.reshape(N, [batch_size, -1]))
-                    if "transpose_pointclouds" in reshape_flags:
-                        batch_data = (batch_data[0].T, batch_data[1].T, batch_data[2].T)
-
-                # yield
-                yield batch_data
 
     def generate_representative_batch(self,
                                       train,
                                       instances_number=2,
-                                      shuffle_files=True,
+                                      shuffle_clouds=False,
                                       shuffle_points=False,
                                       jitter_points=False,
                                       rotate_pointclouds=False,
                                       rotate_pointclouds_up=False,
-                                      sampling_method='fps',
-                                      reshape_flags=[]):
+                                      sampling_method='fps'):
         """
         Take pointclouds with at least instances_number of each class.
     
@@ -316,99 +251,87 @@ class ModelnetData(GenericData) :
             instances_number (int): Size of a batch expressed in instances_number of each CLASSES_COUNT,
                 resulting in batch_size equals instances_number * CLASSES_COUNT. Please assume every
                 object should appear at least two times in the batch, so recommended batches_number is 2.
+            shuffle_clouds (boolean): Should we shuffle clouds order?
             shuffle_points (boolean): Should we shuffle points in the pointclouds?
             jitter_points (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
             sampling_method (str): How should I sample the modelnet cloud? Supported formats, are:
                 random, uniform, via_graphs.
-            reshape_flags (list of str): Output pointclouds are in the default shape of
-                [B, 3 N, 3]. One can specify some reshape flags here:
-                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
-                    would be [B, 3, N*3]
         Returns:
             (np.ndarray of size [B, N, 3], np.ndarray of size [B, N]): Representative batch and it's labels.
         """
-        # Train or test dir?
+        # Train or test data?
         if train:
-            pointcloud_files = self.train_files
+            ptclds = self.pointclouds_train
+            labels = self.labels_train
         else:
-            pointcloud_files = self.test_files
-        
-        # shuffle train files
-        pointcloud_files_idxs = np.arange(0, len(pointcloud_files))
-        if shuffle_files:
-            np.random.shuffle(pointcloud_files_idxs)
+            ptclds = self.pointclouds_test
+            labels = self.labels_test
  
-         # iterate over all files
-        for idx in range(len(pointcloud_files)):
-            # load pointclouds from file
-            file_pointclouds, file_labels = ModelnetData._load_h5_file(pointcloud_files[pointcloud_files_idxs[idx]])
-            # shuffle pointclouds from file
-            if shuffle_files:
-                file_pointclouds, file_labels, _ = ModelnetData._shuffle_data_with_labels(file_pointclouds, file_labels)
-            file_labels = np.squeeze(file_labels)
-            # get sorted pointclouds along labels
-            pointclouds = { k : [] for k in range(self.CLASSES_COUNT)}
-            for cloud_idx in range(file_labels.shape[0]):
-                pointclouds[file_labels[cloud_idx]].append(file_pointclouds[cloud_idx])
-                
-            # iterate over all batches in this file
-            for _ in range(int(math.floor(file_pointclouds.shape[0] / self.CLASSES_COUNT / instances_number))):
-                
-                batch_clouds = []
-                batch_labels = []
-                for instance_idx in range(instances_number):
-                    for class_idx in range(self.CLASSES_COUNT):
-                        cloud_class_idx = np.random.choice(np.arange(len(pointclouds[class_idx])), 1)[0]
-                        batch_clouds.append(pointclouds[class_idx][cloud_class_idx])
-                        batch_labels.append(class_idx)
+        # shuffle point clouds order
+        if shuffle_clouds:
+            ptclds, labels, _ = ModelnetData._shuffle_data_with_labels(ptclds, labels)
+        labels = np.squeeze(labels)
+        # get sorted pointclouds along labels
+        ptclds_sorted = { k : [] for k in range(self.CLASSES_COUNT)}
+        for cloud_idx in range(labels.shape[0]):
+            ptclds_sorted[labels[cloud_idx]].append(ptclds[cloud_idx])        
+        # iterate over all batches in this file
+        for _ in range(int(math.floor(ptclds.shape[0] / self.CLASSES_COUNT / instances_number))):
 
-                # stack
-                batch_clouds = np.stack(batch_clouds, axis=0)
-                batch_clouds = np.stack([batch_clouds], axis=1)
-                batch_labels = np.stack(batch_labels, axis=0)
+            batch_clouds = []
+            batch_labels = []
+            for instance_idx in range(instances_number):
+                for class_idx in range(self.CLASSES_COUNT):
+                    cloud_class_idx = np.random.choice(np.arange(len(ptclds_sorted[class_idx])), 1)[0]
+                    batch_clouds.append(ptclds_sorted[class_idx][cloud_class_idx])
+                    batch_labels.append(class_idx)
 
-                # RESIZE
-                if self.pointcloud_size < 2048:
-                    batch_clouds_resized = []
-                    for cloud_idx in range(len(batch_clouds)):                        
-                        if sampling_method == 'random':
-                            cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                            cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                        elif sampling_method == 'uniform':
-                            batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                        elif sampling_method == 'via_graphs':
-                            batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
-                        elif sampling_method == 'fps':
-                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
-                    batch_clouds = np.stack(batch_clouds_resized, axis=0)
-                    batch_clouds = np.stack([batch_clouds_resized], axis=1)
+            # stack
+            batch_clouds = np.stack(batch_clouds, axis=0)
+            batch_clouds = np.stack([batch_clouds], axis=1)
+            batch_labels = np.stack(batch_labels, axis=0)
 
-                # shuffle points
-                if shuffle_points:
-                    batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
-                # jitter
-                if jitter_points:
-                    batch_clouds = ModelnetData._jitter_batch(batch_clouds)
-                # rotate
-                if rotate_pointclouds:
-                    batch_clouds = ModelnetData._rotate_batch(batch_clouds)
-                elif rotate_pointclouds_up:
-                    batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
-                # reshape
-                if "flatten_pointclouds" in reshape_flags:
-                    shape = batch_clouds.shape
-                    batch_clouds = np.reshape(batch_clouds, [shape[0], shape[1], -1])
-    
-                # yield
-                yield np.squeeze(batch_clouds, axis=1), batch_labels
+            # RESIZE
+            if self.pointcloud_size < 2048:
+                batch_clouds_resized = []
+                for cloud_idx in range(len(batch_clouds)):                        
+                    if sampling_method == 'random':
+                        cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                        cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                        batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                    elif sampling_method == 'uniform':
+                        batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
+                    elif sampling_method == 'via_graphs':
+                        batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
+                    elif sampling_method == 'fps':
+                        batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)
+                batch_clouds = np.stack([batch_clouds_resized], axis=1)
 
-    def generate_random_batch(self, train, batch_size=64, shuffle_files=False,
-                              shuffle_points=False, jitter_points=False,
-                              rotate_pointclouds=False, rotate_pointclouds_up=False,
-                              sampling_method='random', reshape_flags=[]):
+            # shuffle points
+            if shuffle_points:
+                batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
+            # jitter
+            if jitter_points:
+                batch_clouds = ModelnetData._jitter_batch(batch_clouds)
+            # rotate
+            if rotate_pointclouds:
+                batch_clouds = ModelnetData._rotate_batch(batch_clouds)
+            elif rotate_pointclouds_up:
+                batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
+
+            # yield
+            yield np.squeeze(batch_clouds, axis=1), batch_labels
+
+    def generate_random_batch(self, train, batch_size=64,
+                              shuffle_clouds=False,
+                              shuffle_points=False,
+                              jitter_points=False,
+                              rotate_pointclouds=False,
+                              rotate_pointclouds_up=False,
+                              sampling_method='fps'):
         """ 
         Take random pointcloud, apply optional operations on each pointclouds and return 
         batch of such pointclouds with labels.
@@ -417,83 +340,69 @@ class ModelnetData(GenericData) :
             train (bool): Should we take pointclouds from train or test dataset?
             batch_size (int): Batch size we would split the dataset into (numer of triplets
                 to be returned by the generator).
-            shuffle_files (boolean): Should we shuffle files with pointclouds?
+            shuffle_clouds (boolean): Should we shuffle clouds order?
             shuffle_points (boolean): Should we shuffle points in the pointclouds?
             jitter_pointclouds (boolean): Randomly jitter points with gaussian noise.
             rotate_pointclouds (boolean): Rotate pointclouds with random angle around
                 random axis, but this axis has to contain (0,0) point.
             sampling_method (str): How should I sample the modelnet cloud? Supported formats, are:
                 random, uniform, via_graphs.
-            reshape_flags (list of str): Output pointclouds are in the default shape of
-                [B, N, 3]. One can specify some reshape flags here:
-                flatten_pointclouds -- Flat Nx3 pointcloud to N*3 array, so the output size
-                    would be [B, N*3]
         Returns:
             (np.ndarray of shape [B, N, 3]), where B: batch size, N: number of points in each
                 pointcloud, 3: number of dimensions of each pointcloud (x,y,z).
         """
-        # Train or test dir?
+        # Train or test data?
         if train:
-            pointcloud_files = self.train_files
+            ptclds = self.pointclouds_train
+            labels = self.labels_train
         else:
-            pointcloud_files = self.test_files
-        
-        # shuffle train files
-        pointcloud_files_idxs = np.arange(0, len(pointcloud_files))
-        if shuffle_files:
-            np.random.shuffle(pointcloud_files_idxs)
+            ptclds = self.pointclouds_test
+            labels = self.labels_test
 
-        # iterate over all files
-        for idx in range(len(pointcloud_files)):
-            # load pointclouds from file
-            file_pointclouds, file_labels = ModelnetData._load_h5_file(pointcloud_files[pointcloud_files_idxs[idx]])
-            # shuffle pointclouds from file
-            if shuffle_files:
-                file_pointclouds, file_labels, _ = ModelnetData._shuffle_data_with_labels(file_pointclouds, file_labels)
-            # iterate over all batches in this file
-            for batch_idx in range(int(math.floor(file_pointclouds.shape[0] / batch_size))):
+        # shuffle point clouds order
+        if shuffle_clouds:
+            ptclds, labels, _ = ModelnetData._shuffle_data_with_labels(ptclds, labels)
+        labels = np.squeeze(labels)
+        # iterate over all batches in this file
+        for batch_idx in range(int(math.floor(ptclds.shape[0] / batch_size))):
                 
-                # Get pointclouds and labels
-                batch_clouds = file_pointclouds[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+            # Get pointclouds and labels
+            batch_clouds = ptclds[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+            batch_clouds = np.stack([batch_clouds], axis=1)
+            batch_labels = labels[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+            batch_labels = np.squeeze(batch_labels)
+
+            # RESIZE
+            if self.pointcloud_size < 2048:
+                batch_clouds_resized = []
+                for cloud_idx in range(len(batch_clouds)):
+                    if sampling_method == 'random':
+                        cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
+                        cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
+                        batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
+                    elif sampling_method == 'uniform':
+                        batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
+                    elif sampling_method == 'via_graphs':
+                        batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
+                    elif sampling_method == 'fps':
+                        batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)
                 batch_clouds = np.stack([batch_clouds], axis=1)
-                batch_labels = file_labels[batch_idx * batch_size : (batch_idx + 1) * batch_size]
-                batch_labels = np.squeeze(batch_labels)
 
-                # RESIZE
-                if self.pointcloud_size < 2048:
-                    batch_clouds_resized = []
-                    for cloud_idx in range(len(batch_clouds)):
-                        if sampling_method == 'random':
-                            cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
-                            cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
-                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                        elif sampling_method == 'uniform':
-                            batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                        elif sampling_method == 'via_graphs':
-                            batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
-                        elif sampling_method == 'fps':
-                            batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
-                    batch_clouds = np.stack(batch_clouds_resized, axis=0)
-                    batch_clouds = np.stack([batch_clouds], axis=1)
-
-                # shuffle points
-                if shuffle_points:
-                    batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
-                # jitter
-                if jitter_points:
-                    batch_clouds = ModelnetData._jitter_batch(batch_clouds)
-                # rotate
-                if rotate_pointclouds:
-                    batch_clouds = ModelnetData._rotate_batch(batch_clouds)
-                elif rotate_pointclouds_up:
-                    batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
-                # reshape
-                if "flatten_pointclouds" in reshape_flags:
-                    shape = batch_clouds.shape
-                    batch_clouds = np.reshape(batch_clouds, [shape[0], shape[1], -1])
+            # shuffle points
+            if shuffle_points:
+                batch_clouds = ModelnetData._shuffle_points_in_batch(batch_clouds)
+            # jitter
+            if jitter_points:
+                batch_clouds = ModelnetData._jitter_batch(batch_clouds)
+            # rotate
+            if rotate_pointclouds:
+                batch_clouds = ModelnetData._rotate_batch(batch_clouds)
+            elif rotate_pointclouds_up:
+                batch_clouds = ModelnetData._rotate_batch(batch_clouds, random_axis=False)
     
-                # yield
-                yield np.squeeze(batch_clouds, axis=1), batch_labels
+            # yield
+            yield np.squeeze(batch_clouds, axis=1), batch_labels
 
     def generate_random_batch_multiple_clouds(self, train, batch_size=64, shuffle_files=False,
                                           shuffle_points=False, jitter_points=False,
@@ -524,6 +433,9 @@ class ModelnetData(GenericData) :
                 sampled from one original point cloud, N: number of points in each pointcloud,
                 3: number of dimensions of each pointcloud (x,y,z).
         """
+
+        raise NotImplementedError("This routine is depricated!")
+
         # Train or test dir?
         if train:
             pointcloud_files = self.train_files
