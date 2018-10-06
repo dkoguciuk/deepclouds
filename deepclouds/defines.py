@@ -39,6 +39,11 @@ DATA_MODELNET_DIR = os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')
 Extracted modelnet data directory.
 """
 
+CLASS_NAMES_FILE = os.path.join(DATA_MODELNET_DIR, 'shape_names.txt')
+"""
+File with class names.
+"""
+
 DATA_SYNTHETIC_DIR = os.path.join(DATA_DIR, 'synthetic')
 """
 Synthetic data directory.

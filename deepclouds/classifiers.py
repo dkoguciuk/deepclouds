@@ -16,7 +16,7 @@ class MLPClassifier(md.GenericModel):
     How many classes do we have in the modelnet dataset.
     """
 
-    def __init__(self, mlp_layers_sizes, batch_size, learning_rate):
+    def __init__(self, name, mlp_layers_sizes, batch_size, learning_rate, reg_weight, drop_keepprob):
         """
         Build a model.
         Args:
@@ -30,29 +30,31 @@ class MLPClassifier(md.GenericModel):
         self.mlp_layers_sizes = mlp_layers_sizes
         self.batch_size = batch_size
         self.learning_rate = learning_rate
+        self.reg_weight = reg_weight
+        self.drop_keepprob = drop_keepprob
         self.summaries = []
+        self.name = name
         
-        with tf.variable_scope(self.MODEL_NAME):
-            with tf.name_scope(self.MODEL_NAME):
+        with tf.variable_scope(self.name):
             
-                # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
-                with tf.name_scope("placeholders"):
-                    self.placeholder_embed = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="input_embedding")
-                    self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[-1]], name="true_labels")
-        
-                # init MLP params
-                with tf.name_scope("params"):
-                    self._init_params()
-                
-                # calculate loss & optimizer
-                with tf.name_scope("train"):
-                    self.classification_pred = self._define_classifier(self.placeholder_embed)
-                    self.loss = self._calculate_loss(self.classification_pred, self.placeholder_label)
-                    self.optimizer = self._define_optimizer(self.loss)
-                    self.summaries.append(tf.summary.scalar('loss', self.loss))
-                
-                # merge summaries and write        
-                self.summary = tf.summary.merge(self.summaries)
+            # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
+            with tf.name_scope("placeholders"):
+                self.placeholder_embed = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[0]], name="input_embedding")
+                self.placeholder_label = tf.placeholder(tf.float32, [self.batch_size, self.mlp_layers_sizes[-1]], name="true_labels")
+    
+            # init MLP params
+            with tf.name_scope("params"):
+                self._init_params()
+            
+            # calculate loss & optimizer
+            with tf.name_scope("train"):
+                self.classification_pred = self._define_classifier(self.placeholder_embed)
+                self.loss = self._calculate_loss(self.classification_pred, self.placeholder_label)
+                self.optimizer = self._define_optimizer(self.loss)
+                self.summaries.append(tf.summary.scalar('loss', self.loss))
+            
+            # merge summaries and write        
+            self.summary = tf.summary.merge(self.summaries)
 
     def get_classification_prediction(self):
         """
@@ -101,7 +103,8 @@ class MLPClassifier(md.GenericModel):
             AX = embeddings
             for layer_idx in range(1, len(self.mlp_layers_sizes)-1):
                 with tf.name_scope("layer_" + str(layer_idx)):
-                    AX = tf.nn.relu(tf.matmul(AX, self.mlp_params['class_W' + str(layer_idx)]) + self.mlp_params['class_b' + str(layer_idx)])            
+                    ZX = tf.nn.relu(tf.matmul(AX, self.mlp_params['class_W' + str(layer_idx)]) + self.mlp_params['class_b' + str(layer_idx)])
+                    AX = tf.nn.dropout(ZX, self.drop_keepprob)            
 
             with tf.name_scope("layer_" + str(len(self.mlp_layers_sizes)-1)):
                 return tf.matmul(AX, self.mlp_params['class_W' + str(len(self.mlp_layers_sizes)-1)]) + self.mlp_params['class_b' + str(len(self.mlp_layers_sizes)-1)]
@@ -119,13 +122,18 @@ class MLPClassifier(md.GenericModel):
             (float): Loss of current batch.
         """
         with tf.name_scope("loss"):
-            return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=true_labels, logits=predictions))
+            basic_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=true_labels, logits=predictions))
+            reglr_loss = []
+            for layer_idx in range(1, len(self.mlp_layers_sizes)):
+                reglr_loss.append(tf.nn.l2_loss(self.mlp_params['class_W' + str(layer_idx)]))
+            reglr_loss = tf.reduce_sum(reglr_loss)
+            return basic_loss + reglr_loss*self.reg_weight
 
     def _define_optimizer(self, loss_function):
         """
         Define optimizer operation.
         """
         with tf.name_scope("optimizer"):
-            classifier_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope=self.MODEL_NAME)
+            classifier_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope=self.name)
             return tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(loss_function, var_list=classifier_vars)
         

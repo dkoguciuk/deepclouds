@@ -108,10 +108,19 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
     train_embdgs = np.stack(train_embdgs, axis=0)
     train_labels = np.array(train_labels)
     
-#     clf = SVC(C=0.1, gamma=0.01)
-#     clf.fit(train_embdgs, train_labels)
-#     train_label_hat = clf.predict(train_embdgs)
-#     print ("TRAIN ACC ", float(np.sum(train_label_hat == train_labels)) / len(train_labels))
+    train_embdgs_a = train_embdgs[train_labels == 4]
+    train_embdgs_b = train_embdgs[train_labels == 38]
+    train_labels_a = train_labels[train_labels == 4]
+    train_labels_b = train_labels[train_labels == 38]
+    train_embdgs = np.concatenate((train_embdgs_a, train_embdgs_b))
+    train_labels = np.concatenate((train_labels_a, train_labels_b))
+    
+    
+    #clf = SVC(C=0.1, gamma=0.01)
+    clf = SVC()
+    clf.fit(train_embdgs, train_labels)
+    train_label_hat = clf.predict(train_embdgs)
+    print ("TRAIN ACC ", float(np.sum(train_label_hat == train_labels)) / len(train_labels))
 
 #     cluster_classes = np.unique([f.split('_')[1] for f in subclasses_files])
 #     for class_idx in subclasses_classes:
@@ -191,8 +200,10 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
         ##################################### TEST CLOUD LOOP ################################
         ##########################################################################################
 
-        hit = 0.
-        all = 0.
+        hit_a = 0.
+        hit_b = 0.
+        all_a = 0.
+        all_b = 0.
         sys.stdout.write("Calculating test embedding")
         sys.stdout.flush()
         for clouds, labels in data_gen.generate_random_batch(train = False,
@@ -217,10 +228,35 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
             ##################################################################################################
             ############################################### SVM ##############################################
             ##################################################################################################
+            
+            y_hat = clf.predict(embeddings)
+            
+            where_a = np.where(labels == 4)
+            hit_a += np.sum(y_hat[where_a] == 4)
+            all_a += len(where_a[0])
+            where_b = np.where(labels == 38)
+            hit_b += np.sum(y_hat[where_b] == 38)
+            all_b += len(where_b[0])
+            continue
+            
+            y_a = [labels == 4]
+            y_b = [labels == 38]
+            
+            hit_a = np.sum(y_hat[y_a] == 4)
+            hit_b = np.sum(y_hat[y_a] == 4)
+            all_a = len(y_a)
+            all_b = len(y_b)
+            
+            print ("A = ", hit_a, all_a, float(hit_a)/all_a)
+            print ("B = ", hit_b, all_b, float(hit_b)/all_a)
+            hit += (hit_a + hit_b)
+            all += (all_a + all_b)
+            
+            
 #             y_hat = clf.predict(embeddings)
 #             hit += np.sum(y_hat == labels)
 #             all += len(labels)
-#             continue
+            continue
             
             N = 4
             clouds_ext = []
@@ -309,7 +345,8 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
 #            exit()
 
         print('')
-        print ("Test accuracy = ", hit/all)
+        print ("Test accuracy a= ", float(hit_a)/all_a, 'missed: ', all_a - hit_a)
+        print ("Test accuracy b= ", float(hit_b)/all_b, 'missed: ', all_b - hit_b)
        
 def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
     """

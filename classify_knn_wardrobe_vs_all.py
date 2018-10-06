@@ -27,6 +27,9 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn import decomposition
 from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+from sklearn.utils import class_weight
+import sklearn.metrics as metrics
 
 CLOUD_SIZE = 1024
 CLASSIFIER_MODEL_LOAD = False
@@ -108,10 +111,76 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
     train_embdgs = np.stack(train_embdgs, axis=0)
     train_labels = np.array(train_labels)
     
-#     clf = SVC(C=0.1, gamma=0.01)
-#     clf.fit(train_embdgs, train_labels)
-#     train_label_hat = clf.predict(train_embdgs)
-#     print ("TRAIN ACC ", float(np.sum(train_label_hat == train_labels)) / len(train_labels))
+    # Get wardrobe and other clouds
+    train_embdgs_a = train_embdgs[train_labels == 38]
+    train_embdgs_b = train_embdgs[train_labels != 38]
+    
+#     # Train dev split
+#     dev_fraction = 0.1
+#     np.random.shuffle(train_embdgs_a)
+#     dev_emdbgs_a = train_embdgs_a[len(train_embdgs_a) * (1-dev_fraction):]
+#     train_emdbgs_a = train_embdgs_a[:len(train_embdgs_a) * (1-dev_fraction)]
+#     dev_emdbgs_b = train_embdgs_b[len(train_embdgs_b) * (1-dev_fraction):]
+#     train_emdbgs_b = train_embdgs_b[:len(train_embdgs_b) * (1-dev_fraction)]
+
+    # Train dev labels
+    train_labels_a = np.ones(len(train_embdgs_a), dtype=np.int32)
+    train_labels_b = np.zeros(len(train_embdgs_b), dtype=np.int32)
+#     dev_labels_a = np.ones(len(dev_embdgs_a), dtype=np.int32)
+#     dev_labels_b = np.zeros(len(dev_embdgs_b), dtype=np.int32)
+
+    # Concat train and dev
+    train_embdgs = np.concatenate((train_embdgs_a, train_embdgs_b))
+    train_labels = np.concatenate((train_labels_a, train_labels_b))
+#     dev_embdgs = np.concatenate((dev_embdgs_a, dev_embdgs_b))
+#     dev_labels = np.concatenate((dev_embdgs_a, dev_embdgs_b))
+    
+    # Grid params
+    param_grid = [{'C' : [0.01, 0.1, 1.0, 10., 100., 1000.], 'kernel' : ['linear']},
+                  {'C' : [0.01, 0.1, 1.0, 10., 100., 1000.], 'gamma': [0.001, 0.0001], 'kernel' : ['rbf']}]
+#    param_grid = [{'C' : [0.01, 0.1, 1.0, 10., 100., 1000.], 'kernel' : ['linear']}]
+    scores = ['precision', 'recall', 'f1']
+     
+    for score in scores:
+        print("# Tuning hyper-parameters for %s" % score)
+         
+        clf = GridSearchCV(SVC(class_weight = {1 : 10}), param_grid, cv=5, scoring='%s_macro' % score)
+        clf.fit(train_embdgs, train_labels)
+         
+        print("Best parameters set found on development set:")
+        print()
+        print(clf.best_params_)
+        print()
+        print("Grid scores on development set:")
+        print()
+        means = clf.cv_results_['mean_test_score']
+        stds = clf.cv_results_['std_test_score']
+        for mean, std, params in zip(means, stds, clf.cv_results_['params']):
+            print("%0.3f (+/-%0.03f) for %r" % (mean, std * 2, params))
+        print()
+    
+    #clf = SVC()
+    clf = SVC(kernel='linear', C=100)
+    clf.fit(train_embdgs, train_labels)
+    train_label_hat = clf.predict(train_embdgs)
+    #print ("TRAIN ACC ", float(np.sum(train_label_hat == train_labels)) / len(train_labels))
+    print ("TRAIN ACC ", float(np.sum(train_label_hat == train_labels)) / len(train_labels))
+    if len(np.unique(train_label_hat)) == 1:
+        print ("NOPE")
+    else:
+        CM = metrics.confusion_matrix(train_labels, train_label_hat)
+        
+        TN = CM[0][0]
+        FN = CM[1][0]
+        TP = CM[1][1]
+        FP = CM[0][1]
+        prec = float(TP) / (TP + FP)
+        recl = float(TP) / (TP + FN)
+        
+        print ("TRAIN PRECISION : ", prec)
+        print ("TRAIN RECALL    : ", recl)
+        print ("F1 SCORE        : ", 2 * prec * recl / (prec + recl))
+    
 
 #     cluster_classes = np.unique([f.split('_')[1] for f in subclasses_files])
 #     for class_idx in subclasses_classes:
@@ -191,8 +260,8 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
         ##################################### TEST CLOUD LOOP ################################
         ##########################################################################################
 
-        hit = 0.
-        all = 0.
+        labels_true = []
+        labels_pred = []
         sys.stdout.write("Calculating test embedding")
         sys.stdout.flush()
         for clouds, labels in data_gen.generate_random_batch(train = False,
@@ -217,10 +286,45 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
             ##################################################################################################
             ############################################### SVM ##############################################
             ##################################################################################################
+            
+            y_hat = clf.predict(embeddings)
+            
+            # change true labels to 0-1
+            labels[labels == 38] = 255
+            labels[labels < 255] = 0
+            labels[labels == 255] = 1
+            
+            # add labels
+            labels_true.append(labels)
+            labels_pred.append(y_hat)
+            continue
+            
+            where_a = np.where(labels == 38)
+            hit_a += np.sum(y_hat[where_a] == 4)
+            all_a += len(where_a[0])
+            where_b = np.where(labels == 38)
+            hit_b += np.sum(y_hat[where_b] == 38)
+            all_b += len(where_b[0])
+            continue
+            
+            y_a = [labels == 4]
+            y_b = [labels == 38]
+            
+            hit_a = np.sum(y_hat[y_a] == 4)
+            hit_b = np.sum(y_hat[y_a] == 4)
+            all_a = len(y_a)
+            all_b = len(y_b)
+            
+            print ("A = ", hit_a, all_a, float(hit_a)/all_a)
+            print ("B = ", hit_b, all_b, float(hit_b)/all_a)
+            hit += (hit_a + hit_b)
+            all += (all_a + all_b)
+            
+            
 #             y_hat = clf.predict(embeddings)
 #             hit += np.sum(y_hat == labels)
 #             all += len(labels)
-#             continue
+            continue
             
             N = 4
             clouds_ext = []
@@ -309,7 +413,24 @@ def classify_knn(name, embeddings_dir, batch_size, epochs, learning_rate, device
 #            exit()
 
         print('')
-        print ("Test accuracy = ", hit/all)
+        labels_true = np.concatenate(labels_true)
+        labels_pred = np.concatenate(labels_pred)
+        
+        CM = metrics.confusion_matrix(labels_true, labels_pred)
+        
+        TN = CM[0][0]
+        FN = CM[1][0]
+        TP = CM[1][1]
+        FP = CM[0][1]
+        prec = float(TP) / (TP + FP)
+        recl = float(TP) / (TP + FN)
+        
+        print ("TEST PRECISION : ", prec)
+        print ("TEST RECALL    : ", recl)
+        print ("TEST F1 SCORE  : ", 2 * prec * recl / (prec + recl))
+        
+        #print ("Test accuracy a= ", float(hit_a)/all_a, 'missed: ', all_a - hit_a)
+        #print ("Test accuracy b= ", float(hit_b)/all_b, 'missed: ', all_b - hit_b)
        
 def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
     """
@@ -375,7 +496,10 @@ def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
         ##########################################################################################
     
         # Get training clouds
-        for class_idx, class_name in enumerate(tqdm(data_gen.class_names)):
+        for class_idx, class_name in enumerate(data_gen.class_names):
+        
+#             if class_idx != 38:
+#                 continue
         
             ##########################################################################################
             ######################################## CALC EMBEDDINGS #################################
@@ -387,6 +511,10 @@ def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
                                                             rotate_pointclouds=False,
                                                             rotate_pointclouds_up=ROTATE_CLOUDS_UP,
                                                             sampling_method=SAMPLING_METHOD)
+            
+            print (class_name, clouds.shape[0])
+            continue
+            
                  
             embeddings = []
             embedding_inputs = np.split(clouds, len(clouds))
@@ -397,10 +525,10 @@ def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
                                                                                        features_model.placeholder_is_tr : True}))        
             embeddings = np.squeeze(np.concatenate(embeddings))
             
-#             ##########################################################################################
-#             ########################################### PCA ##########################################
-#             ##########################################################################################
-#              
+            ##########################################################################################
+            ########################################### PCA ##########################################
+            ##########################################################################################
+              
 #             # PCA decomposition 
 #             start_time = time.time()
 #             pca = decomposition.PCA(n_components=2)
@@ -444,11 +572,12 @@ def calc_and_save_train_embeddings(embeddings_dir, abstraction_level):
                     #np.save(os.path.join(embeddings_dir, 'cloud_' + str(class_idx) + '_mean_' + str(i) + '.npy'), kmeans_model.cluster_centers_[0])
             elif abstraction_level == 'instance':
                 np.random.shuffle(embeddings)
-                for i in range(50):
+                for i in range(len(embeddings)):
                     np.save(os.path.join(embeddings_dir, 'cloud_' + str(class_idx) + '_mean_' + str(i) + '.npy'), embeddings[i])
             else:
                 print ("THIS abstraction_level IS NOT IMPLEMENTED YET")
                 exit()
+        exit()
             
 
 def main(argv):

@@ -9,15 +9,23 @@ import os
 import sys
 import shutil
 import argparse
+import itertools
 import numpy as np
+from tqdm import tqdm
 import tensorflow as tf
 import train_with_hparam
+import matplotlib.pyplot as plt
 import deepclouds.defines as df
+import sklearn.metrics as metrics
 import deepclouds.modelnet_data as modelnet
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
+from sklearn.metrics import f1_score
+
 CLOUD_SIZE = 1024
+INPUT_CLOUD_DROPOUT_KEEP = 1.00
+
 CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
 SYNTHETIC = False
@@ -28,10 +36,26 @@ READ_BLOCK_METHOD = 'pointnet'
 PROCESS_BLOCK_METHOD = 'max-pool'
 #PROCESS_BLOCK_METHOD = 'attention-rnn'
 SAMPLING_METHOD = 'fps'
+#DISTANCE = 'cosine'
+DISTANCE = 'euclidian'
+CLASSIFIER_REG_WEIGHT = 0.001
+CLASSIFIER_DROP_KEEPPROB = 0.70
+
+#    REG    DROP    TRAIN   TEST
+#    0.0    0.25    89.4    75.8
+#    0.0    0.35    95.4    81.7
+#    0.0    0.42    96.0    82.1
+#    0.0    0.50    96.7    82.6
+#    0.0    0.62    96.8    82.6
+#    0.0    0.75    97.0    82.3
+
+#    0.0001 0.60    96.9    82.0
+#    0.0003 0.60    96.8    82.5
+#    0.001- 0.60    96.4    81.8
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [512, 256, 128, 40]):
+                         classifier_layers = [512, 256, 128, 64, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -44,7 +68,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE, permuted=SHUFFLE_CLOUDS,
                                           rotated_up=ROTATE_CLOUDS_UP, rotated_rand=False)
     else:
-        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE)
+        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -54,14 +78,14 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
         with tf.device(device):
             features_model = DeepCloudsModel(train=False,
                                              batch_size = batch_size,
-                                             pointcloud_size = CLOUD_SIZE,
+                                             pointcloud_size = int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP),
                                              read_block_units = READ_BLOCK_UNITS,
                                              process_block_steps=process_block_steps,
                                              normalize_embedding=True, verbose=True,
                                              input_t_net=True, feature_t_net=True,
                                              read_block_method=READ_BLOCK_METHOD,
                                              process_block_method=PROCESS_BLOCK_METHOD,
-                                             distance='cosine')
+                                             distance=DISTANCE)
 
             features_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope="end-to-end")
@@ -72,7 +96,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     ##################################################################################################
 
     with tf.device(device):
-        classifier_model = MLPClassifier(classifier_layers, batch_size, learning_rate)
+        classifier_model = MLPClassifier('classifier-1', classifier_layers, batch_size, learning_rate,
+                                         CLASSIFIER_REG_WEIGHT, CLASSIFIER_DROP_KEEPPROB)
         if CLASSIFIER_MODEL_LOAD:
             classifier_vars = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES,
                                                 scope=classifier_model.MODEL_NAME)
@@ -112,7 +137,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             accuracies = []
             global_batch_idx = 1
             checkpoint_skip_epochs = 25
-            for epoch in range(epochs):
+            for epoch in tqdm(range(epochs)):
 
                 ##########################################################################################
                 ##################################### BATCH TRAINING LOOP ################################
@@ -131,7 +156,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     ##################################################################################################
 
                     # count embeddings
-                    embedding_input = np.stack([clouds], axis=1)
+                    embedding_input = clouds[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+                    embedding_input = np.expand_dims(embedding_input, axis=1)
                     embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input,
                                                                                       features_model.placeholder_is_tr : False})
                     embeddings = np.squeeze(embeddings)
@@ -150,38 +176,110 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 
 
                     global_batch_idx += 1
+                    writer.add_summary(summary_train, global_batch_idx)
 
-                ##################################################################################################
-                ################################### CLASSIFICATION ACCURACY ######################################
-                ##################################################################################################
+            ##################################################################################################
+            ################################### CLASSIFICATION ACCURACY ######################################
+            ##################################################################################################
 
-                test_acc = calc_acc(train=False, data_gen=data_gen, batch_size=batch_size,
-                                    sess=sess, features_model=features_model, classifier_model=classifier_model)
+            train_hit, train_all, train_conf_mat = calc_acc(train=True, data_gen=data_gen, batch_size=batch_size,
+                                                            sess=sess, features_model=features_model, classifier_model=classifier_model)
 
-                train_acc = calc_acc(train=True, data_gen=data_gen, batch_size=batch_size,
-                                    sess=sess, features_model=features_model, classifier_model=classifier_model)
+            train_acc = train_hit / train_all
 
-                ##################################################################################################
-                ############################################# SUMMARIES ##########################################
-                ##################################################################################################
+            test_hit, test_all, test_conf_mat = calc_acc(train=False, data_gen=data_gen, batch_size=batch_size,
+                                                         sess=sess, features_model=features_model, classifier_model=classifier_model)
 
-                accuracies.append(test_acc)
-                summary_test = tf.Summary()
-                summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value=test_acc)
-                writer.add_summary(summary_test, global_batch_idx)
-                writer.add_summary(summary_train, global_batch_idx)
-                print "Epoch: %06d batch: %03d loss: %06f train_accuracy: %06f test_accuracy: %06f" % (epoch + 1, global_batch_idx, loss, train_acc, test_acc)
+            test_acc = test_hit / test_all
+            
+#             print ("==========================TRAIN ACCURACIES UNNORM==========================")
+#             for class_idx, class_name in enumerate(data_gen.class_names):
+#                 acc = np.sum(float(train_conf_mat[class_idx, class_idx]) / np.sum(train_conf_mat[class_idx]))
+#                 valmax1 = 0
+#                 valmax2 = 0
+#                 if class_idx > 0:
+#                     argmax1 = np.argmax(train_conf_mat[class_idx,:class_idx])
+#                     valmax1 = np.max(train_conf_mat[class_idx,:class_idx])
+#                 if class_idx < class_idx-2:
+#                     argmax2 = np.argmax(train_conf_mat[class_idx,class_idx+1:])
+#                     valmax2 = np.max(train_conf_mat[class_idx,class_idx+1:])
+#                 if valmax1 == valmax2 and valmax1 == 0:
+#                     print (class_idx, class_name, acc)
+#                 elif valmax1 >= valmax2:
+#                     print (class_idx, class_name, 'accuracy:', acc, 'predicted_as:', argmax1, 'how_many:', valmax1)
+#                 elif valmax1 < valmax2:
+#                     print (class_idx, class_name, 'accuracy:', acc, 'predicted_as:', argmax2, 'how_many:', valmax2)
 
-                ##################################################################################################
-                ################################## SAVE CLASSIFICATION MODEL #####################################
-                ##################################################################################################
+            class_acc = []
+            print ("==========================TRAIN ACCURACIES==========================")
+            for class_idx, class_name in enumerate(data_gen.class_names):
+                
+                true_pos = float(np.sum(train_conf_mat[class_idx]))                                            # sum in rows
+                flse_pos = float(np.sum(train_conf_mat[:, class_idx]) - train_conf_mat[class_idx, class_idx])  # sum in cols without querry
+                flse_neg = float(np.sum(train_conf_mat[class_idx]) - train_conf_mat[class_idx, class_idx])     # sum in rows without querry
+                
+                precsn = true_pos / (true_pos + flse_pos)
+                recall = true_pos / (true_pos + flse_neg)
+                f1_scr = 2 * precsn * recall / (precsn + recall)
+                
+                acc = np.sum(float(train_conf_mat[class_idx, class_idx]) / np.sum(train_conf_mat[class_idx]))
+                class_acc.append(acc)
+                print (class_name, acc, f1_scr)
 
-                if (epoch+1) % checkpoint_skip_epochs == 0:
+            class_acc_test = []
+            print ("==========================TEST ACCURACIES==========================")
+            for class_idx, class_name in enumerate(data_gen.class_names):
+                
+                true_pos = float(np.sum(test_conf_mat[class_idx]))                                            # sum in rows
+                flse_pos = float(np.sum(test_conf_mat[:, class_idx]) - test_conf_mat[class_idx, class_idx])  # sum in cols without querry
+                flse_neg = float(np.sum(test_conf_mat[class_idx]) - test_conf_mat[class_idx, class_idx])     # sum in rows without querry
+                
+                precsn = true_pos / (true_pos + flse_pos)
+                recall = true_pos / (true_pos + flse_neg)
+                f1_scr = 2 * precsn * recall / (precsn + recall)
+                
+                acc = np.sum(float(test_conf_mat[class_idx, class_idx]) / np.sum(test_conf_mat[class_idx]))
+                class_acc_test.append(acc)
+                print (class_name, acc, f1_scr)
 
-                    # Save model
-                    save_path = classifier_model.save_model(sess, name)
-                    print "Model saved in file: %s" % save_path
-                    print "MAX ACC = ", np.max(accuracies)
+            print ("TRAN_HIT = ", train_hit, "TRAN_ALL = ", train_all, "TRAIN_ACC" , train_hit/train_all)
+            print ("TRAIN_CLASS_ACC = ", np.mean(class_acc))
+            print ("TEST_HIT = ", test_hit, "TEST_ALL = ", test_all, "TEST_ACC" , test_hit/test_all)
+            print ("TEST_CLASS_ACC = ", np.mean(class_acc_test))
+
+            plot_confusion_matrix(train_conf_mat, classes=data_gen.class_names, normalize=False, title='Train confusion matrix unnorm')
+            plot_confusion_matrix(train_conf_mat, classes=data_gen.class_names, normalize=True, title='Train confusion matrix norm')
+            plot_confusion_matrix(test_conf_mat, classes=data_gen.class_names, normalize=False, title='Test confusion matrix unnorm')
+            plot_confusion_matrix(test_conf_mat, classes=data_gen.class_names, normalize=True, title='Test confusion matrix norm')
+
+#   #              if epoch == epochs - 1: 
+#                 if epoch == 0: 
+#                     plot_confusion_matrix(train_conf_mat, classes=data_gen.class_names, normalize=False, title='Train confusion matrix unnorm')
+#                     plot_confusion_matrix(train_conf_mat, classes=data_gen.class_names, normalize=True, title='Train confusion matrix norm')
+#                     plot_confusion_matrix(test_conf_mat, classes=data_gen.class_names, normalize=False, title='Test confusion matrix unnorm')
+#                     plot_confusion_matrix(test_conf_mat, classes=data_gen.class_names, normalize=True, title='Test confusion matrix norm')
+# 
+#                 ##################################################################################################
+#                 ############################################# SUMMARIES ##########################################
+#                 ##################################################################################################
+# 
+#                 accuracies.append(test_acc)
+#                 summary_test = tf.Summary()
+#                 summary_test.value.add(tag="%stest_classification_accuracy" % "", simple_value=test_acc)
+#                 writer.add_summary(summary_test, global_batch_idx)
+#                 writer.add_summary(summary_train, global_batch_idx)
+#                 print "Epoch: %06d batch: %03d loss: %06f train_accuracy: %06f test_accuracy: %06f" % (epoch + 1, global_batch_idx, loss, train_acc, test_acc)
+# 
+#                 ##################################################################################################
+#                 ################################## SAVE CLASSIFICATION MODEL #####################################
+#                 ##################################################################################################
+# 
+              #if (epoch+1) % checkpoint_skip_epochs == 0:
+
+            # Save model
+            save_path = classifier_model.save_model(sess, name)
+            print "Model saved in file: %s" % save_path
+            #print "MAX ACC = ", np.max(accuracies)
 
         else:
             accuracies = []
@@ -210,6 +308,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     labels_padded = np.concatenate((labels, labels_padding), axis=0)
 
                     # count embeddings
+                    embedding_input = embedding_input[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
                     embedding_input = np.stack([clouds_padded], axis=1)
                     embeddings = sess.run(features_model.get_embeddings(),
                                                feed_dict={features_model.placeholder_embdg: embedding_input,
@@ -261,8 +360,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 
 def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model):
 
-    hit = 0.
-    all = 0.
+    all_predcs = []
+    all_labels =[]
     for clouds, labels in data_gen.generate_random_batch(train, #16):# 400 test examples / 16 clouds = 25 batches
                                                          batch_size = 16,
                                                          shuffle_points=SHUFFLE_CLOUDS,
@@ -278,6 +377,7 @@ def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model
         labels_padded = np.concatenate((labels, labels_padding), axis=0)
 
         # count embeddings
+        clouds_padded = clouds_padded[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
         embedding_input = np.stack([clouds_padded], axis=1)
         embeddings = sess.run(features_model.get_embeddings(),
                               feed_dict={features_model.placeholder_embdg: embedding_input,
@@ -292,14 +392,59 @@ def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model
                                    classifier_model.placeholder_label: labels_padded_one_hot})
 
 
-        # accuracy
+        # predictions
         predictions = np.argmax(pred, axis=1)
         predictions = predictions[:len(labels)]
-        hit = hit + sum(predictions == labels)
-        all = all + len(labels)
+        all_predcs.append(predictions)
+        all_labels.append(labels)
+
+    # accuracy and confusion matrix
+    all_predcs = np.concatenate(all_predcs)
+    all_labels = np.concatenate(all_labels)
+    hit = float(sum(all_predcs == all_labels))
+    all = len(all_predcs)
+    confusion_matrix = metrics.confusion_matrix(all_labels, all_predcs)
 
     # ret acc
-    return hit/all
+    return hit, all, confusion_matrix
+
+def plot_confusion_matrix(confusion_matrix, classes=None,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+
+    Args:
+        confusion_matrix (np.ndarray of size CxC): Confusion matrix with unnormalized values.
+        classes (list of str): List of classes names.
+        normalize (boolean): Should I normalize confusion matrix?
+        cmap (plt.cm): color map.
+    """
+    if normalize:
+        confusion_matrix = confusion_matrix.astype('float') / confusion_matrix.sum(axis=1)[:, np.newaxis]
+
+    plt.figure()
+    plt.imshow(confusion_matrix, interpolation='nearest', aspect='auto', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    if classes is not None:
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes, rotation=45)
+        plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else 'd'
+    thresh = confusion_matrix.max() / 2.
+    for i, j in itertools.product(range(confusion_matrix.shape[0]), range(confusion_matrix.shape[1])):
+        if confusion_matrix[i, j] != 0:
+            plt.text(j, i, format(confusion_matrix[i, j], fmt),
+                     horizontalalignment="center",
+                     color="white" if confusion_matrix[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.show()
 
 def main(argv):
 

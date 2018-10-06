@@ -44,6 +44,12 @@ INSTANCES_NUMBER = 10   # 889 / 10 = 88 batches      # train = 889 for each clou
 BATCHES = 88
 REGULARIZATION_WEIGHT = 0.01
 
+# GOOD AFTER 100
+#ALREADY_GOOD = ['airplane', 'bed', 'bottle', 'car', 'chair', 'laptop', 'sofa', 'toilet']
+ALREADY_GOOD = ['airplane', 'bathtub', 'bed', 'bottle', 'bowl', 'car', 'chair',
+                'cone', 'guitar', 'keyboard', 'lamp', 'laptop', 'sofa', 'toilet',
+                'mantel', 'monitor', 'person', 'piano', 'sink', 'table']
+
 # LOGGING
 MODEL_SAVE_AFTER_EPOCHS = 25
 
@@ -243,13 +249,20 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                         shuffle_clouds=True, jitter_points=True, rotate_pointclouds=False,
                         rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD), total=BATCHES)):
 
+                # NEED FINETUNED!
+                need_finetuned_idx = [idx for idx in range(len(labels)) if data_gen.class_names[labels[idx]] not in ALREADY_GOOD]
+                clouds = clouds[need_finetuned_idx]
+                labels = labels[need_finetuned_idx]
+
                 ##################################################################################################
                 ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
                 ##################################################################################################
 
                 # calc embeddings
                 embeddings = []
-                embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
+                #embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
+                #embedding_inputs = np.split(clouds, 8) # (40 - 8) * 10 = 320        320/8 = 40
+                embedding_inputs = np.split(clouds, 5)  # (40 - 20) * 10 = 200       200/5 = 40
                 for embedding_input in embedding_inputs:
                     embedding_input = embedding_input[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
                     embedding_input = np.expand_dims(embedding_input, axis=1)         
@@ -270,8 +283,10 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
  
-                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
-                training_labels = np.split(labels, INSTANCES_NUMBER)
+                #training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
+                #training_labels = np.split(labels, INSTANCES_NUMBER)
+                training_inputs = np.split(training_inputs, 5)
+                training_labels = np.split(labels, 5)
                 for training_input, training_label in zip(training_inputs, training_labels):
                     training_input = training_input[:, :, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
                     global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(

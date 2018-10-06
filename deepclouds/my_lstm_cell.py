@@ -11,7 +11,10 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import array_ops
-from tensorflow.python.ops.rnn_cell_impl import _LayerRNNCell, LSTMStateTuple
+#from tensorflow.python.ops.rnn_cell_impl import _LayerRNNCell, LSTMStateTuple
+from tensorflow.python.ops.rnn_cell_impl import LSTMStateTuple
+from tensorflow.contrib.rnn import LayerRNNCell as _LayerRNNCell
+
 
 from tensorflow.python.layers import base as base_layer
 

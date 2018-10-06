@@ -24,12 +24,9 @@ from deepclouds.model import DeepCloudsModel
 
 
 CLOUD_SIZE = 1024
-INPUT_CLOUD_DROPOUT_KEEP = 0.75
-
-#DISTANCE = 'cosine'
-DISTANCE = 'euclidian'
+DISTANCE = 'cosine'
+#DISTANCE = 'euclidian'
 SAMPLING_METHOD = 'fps'
-
 LOAD_MODEL = True
 CALC_DIST = False
 SYNTHETIC = False
@@ -39,10 +36,9 @@ SHUFFLE_CLOUDS = True
 READ_BLOCK_METHOD = 'pointnet'
 #PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
-
-INSTANCES_NUMBER = 10   # 889 / 10 = 88 batches      # train = 889 for each cloud / 127 = 7 batches
-BATCHES = 88
-REGULARIZATION_WEIGHT = 0.01
+INSTANCES_NUMBER = 40      # train = 889 for each cloud / 127 = 7 batches
+BATCHES = 22               # train = 889 for each cloud / 127 = 7 batches
+REGULARIZATION_WEIGHT = 0.0
 
 # LOGGING
 MODEL_SAVE_AFTER_EPOCHS = 25
@@ -62,13 +58,11 @@ def find_semi_hard_triples_to_train(embeddings, labels, margin):
             distances = np.linalg.norm(embeddings - embeddings[cloud_idx], axis=-1)
         elif DISTANCE == 'cosine':
             numerator = np.squeeze(np.sum(np.multiply(embeddings[cloud_idx][0], embeddings), axis=-1))
-            denominator = (np.linalg.norm(embeddings[cloud_idx][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1)) + 1e-9)
-#             if denominator.shape[0] != np.count_nonzero(denominator):
-#                 print ('Numerator: ', numerator.shape, 'denominator: ', denominator.shape,
-#                        'non zero denominator :', np.count_nonzero(denominator),
-#                        'non zero querry: ', np.count_nonzero(np.linalg.norm(embeddings[cloud_idx][0])),
-#                        'non zero allemb: ', np.count_nonzero(np.squeeze(np.linalg.norm(embeddings, axis=-1))))
-#                 #exit()
+            denominator = np.linalg.norm(embeddings[cloud_idx][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1))
+            if denominator.shape[0] != np.count_nonzero(denominator):
+                print (denominator.shape[0], np.count_nonzero(denominator),
+                       np.count_nonzero(np.linalg.norm(embeddings[cloud_idx][0])),
+                       np.count_nonzero(np.squeeze(np.linalg.norm(embeddings, axis=-1))))
             distances = 1 - np.divide(numerator, denominator)
         
         # find hard positive
@@ -93,19 +87,17 @@ def calc_inner_class_distance(sess, data_gen, model, margin):
     # Inner class distance
     inner_class_distances = []
     for class_idx, class_name in enumerate(data_gen.class_names):
-        
-        if class_idx != 1:
-            continue
-
+#         if class_idx != 39:
+#             continue
         class_embeddings = []
-        for clouds, labels in tqdm(data_gen.generate_representative_batch_for_train(
+        for clouds, labels in data_gen.generate_representative_batch_for_train(
                                                                      instances_number=INSTANCES_NUMBER,
                                                                      shuffle_points=SHUFFLE_CLOUDS,
                                                                      shuffle_clouds=True,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
                                                                      rotate_pointclouds_up=ROTATE_CLOUDS_UP,
-                                                                     sampling_method=SAMPLING_METHOD)):
+                                                                     sampling_method=SAMPLING_METHOD):
              
             embeddings = []
             embedding_inputs = np.split(clouds, INSTANCES_NUMBER) #200/40 = 5
@@ -116,13 +108,16 @@ def calc_inner_class_distance(sess, data_gen, model, margin):
                                                                               model.placeholder_is_tr : True}))
             embeddings = np.concatenate(embeddings)
             
-            # INSTANCES = 40
+                        # INSTANCES = 40
             class_idcs = np.where(labels == class_idx)[0]
+            #labels = labels[class_idcs]
+            #clouds = clouds[class_idcs]
             embeddings = embeddings[class_idcs]
             class_embeddings.append(embeddings)
 
         class_embeddings = np.concatenate(class_embeddings)
-        
+#         np.save('bench_embeddings.npy', class_embeddings)
+#         exit()
         distances = []
         if DISTANCE == 'cosine':
             for querry_embedding in class_embeddings:
@@ -140,7 +135,6 @@ def calc_inner_class_distance(sess, data_gen, model, margin):
         distance = np.mean(distances[np.triu_indices(len(class_embeddings), 1)])
         inner_class_distances.append(distance)
         print ('CLASS ', class_name, ' distance: ', distance)
-        exit()
      
     # Scale things up
     inner_class_weights = np.array(inner_class_distances / np.sum(inner_class_distances), dtype=np.float32)
@@ -174,7 +168,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             model = DeepCloudsModel(train=True,
-                                    batch_size=data_gen.CLASSES_COUNT, pointcloud_size=int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP),
+                                    batch_size=data_gen.CLASSES_COUNT, pointcloud_size=CLOUD_SIZE,
                                     read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
@@ -231,17 +225,26 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
 #             if epoch % 1 == 0:
 #                 class_weights = calc_inner_class_distance(sess, data_gen, model, margin)
 #                 print ("WEIGHTS COMPUTED...")
-            #class_weights = np.ones(40, dtype=np.float32) / 4;
-            class_weights = np.ones(data_gen.CLASSES_COUNT, dtype=np.float32) / data_gen.CLASSES_COUNT
+            class_weights = np.ones(40, dtype=np.float32) / 40
+           # class_weights = np.ones(data_gen.CLASSES_COUNT, dtype=np.float32) / data_gen.CLASSES_COUNT
 
             ##################################################################################################
             ########################################### BATCHES LOOP #########################################
             ##################################################################################################
         
-            for batch_in_epoch_idx, (clouds, labels) in enumerate(tqdm(data_gen.generate_representative_batch_for_train(
+            for batch_in_epoch_idx, (clouds, labels) in enumerate(data_gen.generate_representative_batch_for_train(
                         instances_number=INSTANCES_NUMBER, shuffle_points=SHUFFLE_CLOUDS,
                         shuffle_clouds=True, jitter_points=True, rotate_pointclouds=False,
-                        rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD), total=BATCHES)):
+                        rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD)):#, total=BATCHES)):
+                
+                # Get clouds
+                clouds_a = clouds[labels==38]
+                labels_a = np.ones(len(clouds_a), dtype=np.int32)
+                clouds_b = clouds[labels!=38]
+                np.random.shuffle(clouds_b)
+                labels_b = np.zeros(len(clouds_b), dtype=np.int32)
+                clouds = np.concatenate((clouds_a, clouds_b))
+                labels = np.concatenate((labels_a, labels_b))
 
                 ##################################################################################################
                 ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
@@ -249,13 +252,12 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
 
                 # calc embeddings
                 embeddings = []
-                embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
-                for embedding_input in embedding_inputs:
-                    embedding_input = embedding_input[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
-                    embedding_input = np.expand_dims(embedding_input, axis=1)         
+                clouds_input = np.split(clouds, INSTANCES_NUMBER)  # 80*2 / 4 = 40
+                for cloud_input in clouds_input:
+                    embedding_input = np.expand_dims(cloud_input, axis=1)       
                     embeddings.append(sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input}))
                 embeddings = np.concatenate(embeddings)
-                
+
                 # Find hard examples to train on
                 pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
                   
@@ -270,21 +272,20 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
  
-                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
-                training_labels = np.split(labels, INSTANCES_NUMBER)
+                #training_inputs = np.split(training_inputs, 4)
+                training_inputs = training_inputs[:80]
+                labels = labels[:80]
+                
+                training_inputs = np.split(training_inputs, 2)
+                training_labels = np.split(labels, 2)
                 for training_input, training_label in zip(training_inputs, training_labels):
-                    training_input = training_input[:, :, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
-                    global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
-                        [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
-                         model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
-                                                                                   model.margin : [margin],
-                                                                                   model.placeholder_is_tr : True,
-                                                                                   model.placeholder_label : training_label,
-                                                                                   model.classes_learning_weights : class_weights})
-                    if np.isnan(training_pos).any():
-                        print "POS_DIST", training_pos
-                    if np.isnan(training_neg).any():  
-                        print "NEG_DIST", training_neg
+                    global_batch_idx, _, training_loss, summary_train, training_non_zero = sess.run(
+                            [model.global_step, model.get_optimizer(), model.get_loss_function(),
+                             model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
+                                                                                       model.margin : [margin],
+                                                                                       model.placeholder_is_tr : True,
+                                                                                       model.placeholder_label : training_label,
+                                                                                       model.classes_learning_weights : class_weights})
 
             ##################################################################################################
             ############################################# LOG ################################################
@@ -304,7 +305,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 print "Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate)
             else:
                 print "Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate)
-               
+           
             # Variables histogram
             summary_histograms = sess.run(hist_summary)
             writer.add_summary(summary_histograms, global_batch_idx)             
