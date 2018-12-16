@@ -24,7 +24,6 @@ from deepclouds.model import DeepCloudsModel
 
 
 CLOUD_SIZE = 1024
-INPUT_CLOUD_DROPOUT_KEEP = 0.75
 
 #DISTANCE = 'cosine'
 DISTANCE = 'euclidian'
@@ -32,7 +31,6 @@ SAMPLING_METHOD = 'fps'
 
 LOAD_MODEL = False
 CALC_DIST = False
-SYNTHETIC = False
 READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
@@ -134,7 +132,7 @@ def calc_inner_class_distance(sess, data_gen, model, margin):
 #             for querry_embedding in class_embeddings:
 #                 distances.append(np.linalg.norm(querry_embedding - class_embeddings, axis=1))
         else:
-            print 'DON\'T KNOW THIS DISTANCE METRIC'
+            print('DON\'T KNOW THIS DISTANCE METRIC')
             exit()
         distances = np.stack(distances)
         distance = np.mean(distances[np.triu_indices(len(class_embeddings), 1)])
@@ -146,10 +144,10 @@ def calc_inner_class_distance(sess, data_gen, model, margin):
     inner_class_weights = np.array(inner_class_distances / np.sum(inner_class_distances), dtype=np.float32)
     return inner_class_weights
 
-def train_features_extraction(synthetic, name, batch_size, epochs,
-                                        learning_rate=None, gradient_clip=None,
-                                        margin=None, margin_growth=None,
-                                        device=None):
+def train_features_extraction(name, batch_size, epochs,
+                              learning_rate=None, gradient_clip=None,
+                              margin=None, margin_growth=None,
+                              device=None):
     """
     Train deepclouds with synthetic data.
     """
@@ -161,11 +159,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     ########################################## DATA GENERATOR ########################################
     ##################################################################################################
                 
-    if synthetic:
-        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE, permuted=SHUFFLE_CLOUDS,
-                                          rotated_up=ROTATE_CLOUDS_UP, rotated_rand=False)
-    else:
-        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
+    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
 
     ##################################################################################################
     ######################################### DEEPCLOUDS MODEL #######################################
@@ -174,7 +168,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             model = DeepCloudsModel(train=True,
-                                    batch_size=data_gen.CLASSES_COUNT, pointcloud_size=int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP),
+                                    batch_size=data_gen.CLASSES_COUNT, pointcloud_size=CLOUD_SIZE,
                                     read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
@@ -237,7 +231,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
             ##################################################################################################
             ########################################### BATCHES LOOP #########################################
             ##################################################################################################
-        
+
             for batch_in_epoch_idx, (clouds, labels) in enumerate(tqdm(data_gen.generate_representative_batch_for_train(
                         instances_number=INSTANCES_NUMBER, shuffle_points=SHUFFLE_CLOUDS,
                         shuffle_clouds=True, jitter_points=True, rotate_pointclouds=False,
@@ -251,7 +245,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 embeddings = []
                 embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
                 for embedding_input in embedding_inputs:
-                    embedding_input = embedding_input[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+                    embedding_input = embedding_input[:, :CLOUD_SIZE, :]  # input dropout
                     embedding_input = np.expand_dims(embedding_input, axis=1)         
                     embeddings.append(sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input}))
                 embeddings = np.concatenate(embeddings)
@@ -273,7 +267,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                 training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
                 training_labels = np.split(labels, INSTANCES_NUMBER)
                 for training_input, training_label in zip(training_inputs, training_labels):
-                    training_input = training_input[:, :, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+                    training_input = training_input[:, :, :CLOUD_SIZE, :]  # input dropout
                     global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
                         [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
                          model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
@@ -282,9 +276,9 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
                                                                                    model.placeholder_label : training_label,
                                                                                    model.classes_learning_weights : class_weights})
                     if np.isnan(training_pos).any():
-                        print "POS_DIST", training_pos
+                        print ("POS_DIST", training_pos)
                     if np.isnan(training_neg).any():  
-                        print "NEG_DIST", training_neg
+                        print ("NEG_DIST", training_neg)
 
             ##################################################################################################
             ############################################# LOG ################################################
@@ -301,9 +295,9 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
             if CALC_DIST:# and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
                 pos_man, neg_man = test_features_extraction(data_gen, model, sess, partial_score=synthetic)
                 summary_log.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
-                print "Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate)
+                print ("Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate))
             else:
-                print "Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate)
+                print ("Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate))
                
             # Variables histogram
             summary_histograms = sess.run(hist_summary)
@@ -319,7 +313,7 @@ def train_features_extraction(synthetic, name, batch_size, epochs,
         
             if epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1:
                 save_path = model.save_model(sess, name)
-                print "Model saved in file: %s" % save_path
+                print ("Model saved in file: %s" % save_path)
 
 def test_features_extraction(data_gen, model, sess, partial_score=True):
     """
@@ -403,18 +397,17 @@ def main(argv):
     args = vars(parser.parse_args())
 
     # train
-    train_features_extraction(SYNTHETIC,
-                              args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
+    train_features_extraction(args["name"], batch_size=args["batch_size"], epochs=args["epochs"],
                               learning_rate=args["learning_rate"], gradient_clip=args["gradient_clip"],
                               margin=args["margin"], device=args["device"], margin_growth=args["margin_growth"])
 
     # Print all settings at the end of learning
-    print "Training params:"
-    print "name          = ", args["name"]
-    print "batch_size    = ", args["batch_size"]
-    print "epochs        = ", args["epochs"]
-    print "learning rate = ", args["learning_rate"]
-    print "margin        = ", args["margin"]
+    print("Training params:")
+    print("name          = ", args["name"])
+    print("batch_size    = ", args["batch_size"])
+    print("epochs        = ", args["epochs"])
+    print("learning rate = ", args["learning_rate"])
+    print("margin        = ", args["margin"])
 
 if __name__ == "__main__":
     main(sys.argv[1:])
