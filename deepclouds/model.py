@@ -109,7 +109,7 @@ class GenericModel(object):
             return final_loss
         
     def _triplet_cosine_loss(self, embedding_a, embedding_p, embedding_n,
-                             transformation_matrix, regularization_weight, labels_a, classes_learning_weights):
+                             transformation_matrix, regularization_weight):#, labels_a, classes_learning_weights):
         """
         Define tripplet loss tensor.
 
@@ -140,9 +140,9 @@ positive cloud of size
                 self.neg_dist = 1 - neg_nom / (neg_den + 1e-9)
             with tf.name_scope("copute_loss"):
                 self.basic_loss = tf.maximum(self.pos_dist + self.margin - self.neg_dist, 0.0)
-                loss_num = tf.gather(classes_learning_weights, labels_a)
-                loss_den = tf.reduce_sum(tf.where(self.basic_loss > 0, loss_num, tf.zeros(loss_num.get_shape())))
-                self.weighted_loss = tf.multiply((loss_num / loss_den), self.basic_loss)
+                #loss_num = tf.gather(classes_learning_weights, labels_a)
+                #loss_den = tf.reduce_sum(tf.where(self.basic_loss > 0, loss_num, tf.zeros(loss_num.get_shape())))
+                #self.weighted_loss = tf.multiply((loss_num / loss_den), self.basic_loss)
 
                 self.non_zero_triplets = tf.count_nonzero(self.basic_loss)
                 self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets))
@@ -644,7 +644,7 @@ class DeepCloudsModel(GenericModel):
         # Placeholders for input clouds - we will interpret numer of points in the cloud as timestep with 3 coords as an input number
         with tf.name_scope("placeholders"):
             self.placeholder_embdg = tf.placeholder(tf.float32, [self.batch_size, 1, self.pointcloud_size, 3], name="input_embedding")
-            self.placeholder_label = tf.placeholder(tf.int32, [self.batch_size], name="input_labels")
+            #self.placeholder_label = tf.placeholder(tf.int32, [self.batch_size], name="input_labels")
             self.placeholder_is_tr = tf.placeholder(tf.bool, shape=(), name="input_is_training")
             self.classes_learning_weights = tf.placeholder(tf.float32, [self.CLASSES_COUNT], name="classes_weights")
         
@@ -1433,7 +1433,7 @@ class DeepCloudsModel(GenericModel):
             embeddings_list = tf.unstack(embeddings, axis=1)
             if self.distance == 'cosine':
                 ret = self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2],
-                                                self.transform_anr, self.regularization_weight, self.placeholder_label, self.classes_learning_weights)
+                                                self.transform_anr, self.regularization_weight)#, self.placeholder_label, self.classes_learning_weights)
             elif self.distance == 'euclidian':
                 ret = self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], self.transform_anr, self.regularization_weight)
             else:
