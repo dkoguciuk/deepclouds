@@ -29,7 +29,7 @@ DISTANCE = 'cosine'
 # DISTANCE = 'euclidian'
 SAMPLING_METHOD = 'fps'
 
-LOAD_MODEL = False
+LOAD_MODEL = True
 CALC_DIST = True
 READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
@@ -38,12 +38,12 @@ READ_BLOCK_METHOD = 'pointnet'
 # PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
 
-INSTANCES_NUMBER = 10  # 889 / 10 = 88 batches      # train = 889 for each cloud / 127 = 7 batches
-BATCHES = 88
+INSTANCES_NUMBER = 2  # 889 / 10 = 88 batches      # train = 889 for each cloud / 127 = 7 batches
+BATCHES = 296
 REGULARIZATION_WEIGHT = 0.01
 
 # LOGGING
-MODEL_SAVE_AFTER_EPOCHS = 25
+MODEL_SAVE_AFTER_EPOCHS = 10
 
 
 def find_semi_hard_triples_to_train(embeddings, labels, margin):
@@ -79,7 +79,45 @@ def find_semi_hard_triples_to_train(embeddings, labels, margin):
         if max(positive_distance + margin - negatives_distances[negative_idx], 0) > 0:
             non_zero += 1
     
+    print (hard_positives_indices.shape)
+    print (hard_negatives_indices.shape)
+    exit()
+    
     return hard_positives_indices, hard_negatives_indices, non_zero
+
+def find_semi_hard_triples_to_train_multiple_neg(embeddings, labels, margin):
+    
+    def find_nearest_idx(array, value):
+        return (np.abs(array - value)).argmin()
+    
+    hard_positives_indices = []
+    hard_negatives_indices = []
+    for cloud_idx in range(embeddings.shape[0]):
+        # calc distances
+        if DISTANCE == 'euclidian':
+            distances = np.linalg.norm(embeddings - embeddings[cloud_idx], axis=-1)
+        elif DISTANCE == 'cosine':
+            numerator = np.squeeze(np.sum(np.multiply(embeddings[cloud_idx][0], embeddings), axis=-1))
+            denominator = (np.linalg.norm(embeddings[cloud_idx][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1)))
+            distances = 1 - np.divide(numerator, denominator)
+        
+        # find hard positive
+        class_idx = labels[cloud_idx]
+        class_indices = np.squeeze(np.argwhere(labels == class_idx))
+        hard_positives_indices.append(class_indices[np.argmax(np.take(distances, class_indices))])
+        positive_distance = distances[hard_positives_indices[-1]]
+        
+        # Help vars
+        other_indices = np.squeeze(np.argwhere(labels != class_idx))  # Find indices of all other class instances
+        negatives_distances = np.take(distances, other_indices)  # Find distances to all other class distances
+        # negatives_distances[negatives_distances <= positive_distance] = float('inf')  # Ifinity distance when it's smaller than positive dist plus eps
+        # negative_idx = np.argmin(negatives_distances)  # Smallest
+        # hard_negatives_indices.append(other_indices[negative_idx])  # Find negative embedding index 
+        hard_negatives_indices.append(np.where(negatives_distances <= 2 * margin))
+    
+    # Return
+    # hard_negatives_indices = np.concatenate(hard_negatives_indices, axis=0)
+    return hard_positives_indices, hard_negatives_indices
 
 def calc_inner_class_distance(sess, data_gen, model, margin):
     # Inner class distance
@@ -221,6 +259,8 @@ def train_features_extraction(name, batch_size, epochs,
 #                 print ("WEIGHTS COMPUTED...")
             # class_weights = np.ones(40, dtype=np.float32) / 4;
             class_weights = np.ones(data_gen.CLASSES_COUNT, dtype=np.float32) / data_gen.CLASSES_COUNT
+            training_non_zero = None
+            last_training_input = None
 
             ##################################################################################################
             ########################################### BATCHES LOOP #########################################
@@ -245,22 +285,57 @@ def train_features_extraction(name, batch_size, epochs,
                 embeddings = np.concatenate(embeddings)
                 
                 # Find hard examples to train on
-                pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
-                  
-                # Create triples to train
-                pos_clouds = np.copy(clouds)
-                pos_clouds = pos_clouds[pos_indices, ...]
-                neg_clouds = np.copy(clouds)
-                neg_clouds = neg_clouds[neg_indices, ...]
-                training_inputs = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
+                pos_indices, neg_indices = find_semi_hard_triples_to_train_multiple_neg(embeddings, labels, margin)
+                cloud_a = []
+                cloud_p = []
+                cloud_n = []
+                for i in range (len(pos_indices)):
+                    cloud_a.append(np.tile(np.copy(clouds[i]), (len(neg_indices[i][0]), 1, 1)))
+                    cloud_p.append(np.tile(np.copy(clouds)[pos_indices[i], ...], (len(neg_indices[i][0]), 1, 1)))
+                    cloud_n.append(np.copy(clouds)[neg_indices[i][0], ...])
+                cloud_a = np.concatenate(cloud_a, axis=0)
+                cloud_p = np.concatenate(cloud_p, axis=0)
+                cloud_n = np.concatenate(cloud_n, axis=0)
+                training_inputs = np.stack([cloud_a, cloud_p, cloud_n], axis=1)
+
+                
+#                 # Create triples to train
+#                 pos_clouds = np.copy(clouds)
+#                 pos_clouds = pos_clouds[pos_indices, ...]
+#                 neg_clouds = np.copy(clouds)
+#                 neg_clouds = neg_clouds[neg_indices, ...]
+#                 training_inputs = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
                   
                 ##################################################################################################
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
  
-                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
-                training_labels = np.split(labels, INSTANCES_NUMBER)
-                for training_input, training_label in zip(training_inputs, training_labels):
+#                 training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
+#                 training_labels = np.split(labels, INSTANCES_NUMBER)
+#                 for training_input, training_label in zip(training_inputs, training_labels):
+#                     training_input = training_input[:, :, :CLOUD_SIZE, :]  # input dropout
+#                     global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
+#                         [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
+#                          model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
+#                                                                                    model.margin : [margin],
+#                                                                                    model.placeholder_is_tr : True,
+#                                                                                    model.classes_learning_weights : class_weights})
+
+                # multiply the
+                training_inputs = np.split(training_inputs, range(40, training_inputs.shape[0], 40))
+                for training_input in training_inputs:
+                    if len(training_input) != 40:
+                        if last_training_input is not None:
+                            help = np.concatenate((training_input, last_training_input))
+                            if len(help) > 40:
+                                training_input = np.copy(help[:40])
+                                last_training_input = np.copy(help[40:])
+                            else:
+                                last_training_input = np.copy(help)
+                                continue
+                        else:
+                            last_training_input = np.copy(training_input)
+                            continue
                     training_input = training_input[:, :, :CLOUD_SIZE, :]  # input dropout
                     global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
                         [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
@@ -268,44 +343,41 @@ def train_features_extraction(name, batch_size, epochs,
                                                                                    model.margin : [margin],
                                                                                    model.placeholder_is_tr : True,
                                                                                    model.classes_learning_weights : class_weights})
-                    if np.isnan(training_pos).any():
-                        print ("POS_DIST", training_pos)
-                    if np.isnan(training_neg).any():  
-                        print ("NEG_DIST", training_neg)
 
             ##################################################################################################
             ############################################# LOG ################################################
             ##################################################################################################
  
 #                if global_batch_idx % (BATCHES) == 0:
+                if training_non_zero is not None:
 
-            # Loggin summary
-            summary_log = tf.Summary()
-            summary_log.value.add(tag="%smargin" % "", simple_value=margin)
-            summary_log.value.add(tag="%snon_zero" % "",imple_value=training_non_zero)
-
-            # pos/neg dist
-            if CALC_DIST:  # and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
-                pos_man, neg_man = test_features_extraction(data_gen, model, sess)
-                summary_log.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
-                print ("Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate))
-            else:
-                print ("Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate))
-               
-            # Variables histogram
-            summary_histograms = sess.run(hist_summary)
-            writer.add_summary(summary_histograms, global_batch_idx)             
-
-            # Write summary
-            writer.add_summary(summary_log, global_batch_idx)
-            writer.add_summary(summary_train, global_batch_idx)
+                    # Loggin summary
+                    summary_log = tf.Summary()
+                    summary_log.value.add(tag="%smargin" % "", simple_value=margin)
+                    summary_log.value.add(tag="%snon_zero" % "", simple_value=training_non_zero)
+        
+                    # pos/neg dist
+                    if CALC_DIST:  # and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
+                        pos_man, neg_man = test_features_extraction(data_gen, model, sess)
+                        summary_log.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
+                        print ("Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate))
+                    else:
+                        print ("Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate))
+                       
+                    # Variables histogram
+                    summary_histograms = sess.run(hist_summary)
+                    writer.add_summary(summary_histograms, global_batch_idx)             
+        
+                    # Write summary
+                    writer.add_summary(summary_log, global_batch_idx)
+                    writer.add_summary(summary_train, global_batch_idx)
 
             ##################################################################################################
             ########################################## SAVE MODEL ############################################
             ##################################################################################################
         
             if epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1:
-                save_path = model.save_model(sess, nam
+                save_path = model.save_model(sess, name)
                 print ("Model saved in file: %s" % save_path)
 
 def test_features_extraction(data_gen, model, sess, partial_score=True):

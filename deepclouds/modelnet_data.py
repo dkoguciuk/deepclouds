@@ -29,7 +29,7 @@ else:
     import builtins as excpt
     
 import numpy as np
-#import pointcloud_downsample
+# import pointcloud_downsample
 import numpy.core.umath_tests as nm
 import deepclouds.defines as df
 
@@ -105,7 +105,7 @@ class GenericData(object):
         """
         shape = batch.shape
         pointclouds = np.reshape(batch, [-1, shape[2], shape[3]])
-        for cloud_idx in range(shape[0]*shape[1]):
+        for cloud_idx in range(shape[0] * shape[1]):
             idx = np.arange(pointclouds[cloud_idx].shape[0])
             np.random.shuffle(idx)
             pointclouds[cloud_idx] = pointclouds[cloud_idx][idx, :]
@@ -147,12 +147,12 @@ class GenericData(object):
             (np.ndarray of size [N, 3]): Rotated pointcloud data. 
         """
         # Rotation params
-        theta = np.random.uniform() * 2 * np.pi         # Get random rotation
-        axis = np.random.uniform(size=3)                # Get random axis
-        axis /= np.linalg.norm(axis)                    # Normalize it
+        theta = np.random.uniform() * 2 * np.pi  # Get random rotation
+        axis = np.random.uniform(size=3)  # Get random axis
+        axis /= np.linalg.norm(axis)  # Normalize it
         # Rodrigues' rotation formula (see wiki for more)
-        pointcloud = (pointcloud * np.cos(theta) +
-                      np.cross(axis, pointcloud) * np.sin(theta) +
+        pointcloud = (pointcloud * np.cos(theta) + 
+                      np.cross(axis, pointcloud) * np.sin(theta) + 
                       axis * nm.inner1d(axis, pointcloud).reshape(-1, 1) * (1 - np.cos(theta)))
         return pointcloud
 
@@ -168,10 +168,10 @@ class GenericData(object):
             (np.ndarray of size [N, 3]): Rotated pointcloud data. 
         """
         # Rotation params
-        theta = np.random.uniform() * 2 * np.pi         # Get random rotation
-        cosval = np.cos(theta)                          # Cos of rot angle
-        sinval = np.sin(theta)                          # Sin of rot angle
-        rotation_matrix = np.array([[cosval, 0, sinval],    # rot matrix
+        theta = np.random.uniform() * 2 * np.pi  # Get random rotation
+        cosval = np.cos(theta)  # Cos of rot angle
+        sinval = np.sin(theta)  # Sin of rot angle
+        rotation_matrix = np.array([[cosval, 0, sinval],  # rot matrix
                                     [0, 1, 0],
                                     [-sinval, 0, cosval]])
         pointcloud = np.dot(pointcloud.reshape((-1, 3)), rotation_matrix)
@@ -192,7 +192,7 @@ class GenericData(object):
         """
         shape = batch.shape
         batch = np.reshape(batch, [-1, shape[2], shape[3]])
-        for cloud_idx in range(shape[0]*shape[1]):
+        for cloud_idx in range(shape[0] * shape[1]):
             if random_axis:
                 batch[cloud_idx] = GenericData._rotate_pointcloud(batch[cloud_idx])
             else:
@@ -251,7 +251,7 @@ class ModelnetData(GenericData) :
                 class_clouds = self.pointclouds_train[class_indices]
                 class_labels = self.labels_train[class_indices]
                 # Split idx
-                split_idx = int(len(class_clouds) * (1-dev_fraction))
+                split_idx = int(len(class_clouds) * (1 - dev_fraction))
                 ptclds_trn.append(class_clouds[:split_idx])
                 labels_trn.append(class_labels[:split_idx])
                 ptclds_dev.append(class_clouds[split_idx:])
@@ -296,7 +296,7 @@ class ModelnetData(GenericData) :
                     cluster_indices = np.load(os.path.join(df.DATA_MODELNET_DIR, 'cloud_' + class_idx + '_cluster_' + cluster + '.npy'))
                     # Split
                     new_cld = class_clds[cluster_indices]
-                    new_lbl = np.ones((cluster_indices.shape[0],1), dtype=np.int32) * (int(class_idx)*100 + int(cluster))
+                    new_lbl = np.ones((cluster_indices.shape[0], 1), dtype=np.int32) * (int(class_idx) * 100 + int(cluster))
                     new_clds.append(new_cld)
                     new_lbls.append(new_lbl)
     
@@ -368,9 +368,9 @@ class ModelnetData(GenericData) :
                         cloud_point_idxs = np.arange(len(class_clds[cloud_idx][0]))
                         cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                         class_clouds_resized.append(class_clds[cloud_idx][0][cloud_randm_idxs])
-                    #elif sampling_method == 'uniform':
+                    # elif sampling_method == 'uniform':
                     #    class_clouds_resized.append(pointcloud_downsample.uniform(class_clds[cloud_idx][0]))
-                    #elif sampling_method == 'via_graphs':
+                    # elif sampling_method == 'via_graphs':
                     #    class_clouds_resized.append(pointcloud_downsample.via_graphs(class_clds[cloud_idx][0]))
                     elif sampling_method == 'fps':
                         class_clouds_resized.append(class_clds[cloud_idx][0][:self.pointcloud_size])
@@ -431,7 +431,7 @@ class ModelnetData(GenericData) :
                 cloud_idcs = np.random.choice(len(class_labels), how_many, replace=True)
                 dupa = np.copy(class_clouds[cloud_idcs, ])
                 ptclds_ext.append(dupa)
-                labels_ext.append(np.ones((len(cloud_idcs), 1), dtype=np.int32)*class_idx)
+                labels_ext.append(np.ones((len(cloud_idcs), 1), dtype=np.int32) * class_idx)
         ptclds_ext = np.concatenate(ptclds_ext)
         labels_ext = np.concatenate(labels_ext)
         ptclds = np.concatenate((ptclds, ptclds_ext))
@@ -451,13 +451,13 @@ class ModelnetData(GenericData) :
             batch_clouds = []
             batch_labels = []
             for class_idx in range(self.CLASSES_COUNT):
-                batch_clouds.append(ptclds_sorted[class_idx][batch_idx*instances_number:(batch_idx+1)*instances_number])
+                batch_clouds.append(ptclds_sorted[class_idx][batch_idx * instances_number:(batch_idx + 1) * instances_number])
                 batch_labels.append(np.ones(instances_number, dtype=np.int32) * class_idx)
 
             # stack
-            batch_clouds = np.concatenate(batch_clouds, axis=0) # B, N, 3
-            batch_clouds = np.expand_dims(batch_clouds, axis=1) # B, 1, N, 3
-            batch_labels = np.concatenate(batch_labels)         # B
+            batch_clouds = np.concatenate(batch_clouds, axis=0)  # B, N, 3
+            batch_clouds = np.expand_dims(batch_clouds, axis=1)  # B, 1, N, 3
+            batch_labels = np.concatenate(batch_labels)  # B
 
             # RESIZE
             if self.pointcloud_size < 2048:
@@ -467,14 +467,14 @@ class ModelnetData(GenericData) :
                         cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
                         cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                    #elif sampling_method == 'uniform':
+                    # elif sampling_method == 'uniform':
                     #    batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                    #elif sampling_method == 'via_graphs':
+                    # elif sampling_method == 'via_graphs':
                     #    batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
                     elif sampling_method == 'fps':
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
-                batch_clouds = np.stack(batch_clouds_resized, axis=0)           # B, N', 3
-                batch_clouds = np.expand_dims(batch_clouds_resized, axis=1)     # B, 1, N', 3
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)  # B, N', 3
+                batch_clouds = np.expand_dims(batch_clouds_resized, axis=1)  # B, 1, N', 3
 
             # shuffle points
             if shuffle_points:
@@ -491,7 +491,7 @@ class ModelnetData(GenericData) :
             # yield
             yield np.squeeze(batch_clouds, axis=1), batch_labels
 
-    def generate_representative_batch_for_train_or_devel(self, train_or_devel = 'train',
+    def generate_representative_batch_for_train_or_devel(self, train_or_devel='train',
                                                 instances_number=2,
                                                 shuffle_clouds=False,
                                                 shuffle_points=False,
@@ -596,13 +596,13 @@ class ModelnetData(GenericData) :
             batch_clouds = []
             batch_labels = []
             for class_idx in range(self.CLASSES_COUNT):
-                batch_clouds.append(ptclds_sorted[class_idx][batch_idx*instances_number:(batch_idx+1)*instances_number])
+                batch_clouds.append(ptclds_sorted[class_idx][batch_idx * instances_number:(batch_idx + 1) * instances_number])
                 batch_labels.append(np.ones(instances_number, dtype=np.int32) * class_idx)
 
             # stack
-            batch_clouds = np.concatenate(batch_clouds, axis=0) # B, N, 3
-            batch_clouds = np.expand_dims(batch_clouds, axis=1) # B, 1, N, 3
-            batch_labels = np.concatenate(batch_labels)         # B
+            batch_clouds = np.concatenate(batch_clouds, axis=0)  # B, N, 3
+            batch_clouds = np.expand_dims(batch_clouds, axis=1)  # B, 1, N, 3
+            batch_labels = np.concatenate(batch_labels)  # B
 
             # RESIZE
             if self.pointcloud_size < 2048:
@@ -612,14 +612,14 @@ class ModelnetData(GenericData) :
                         cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
                         cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                    #elif sampling_method == 'uniform':
+                    # elif sampling_method == 'uniform':
                     #    batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                    #elif sampling_method == 'via_graphs':
+                    # elif sampling_method == 'via_graphs':
                     #    batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
                     elif sampling_method == 'fps':
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
-                batch_clouds = np.stack(batch_clouds_resized, axis=0)           # B, N', 3
-                batch_clouds = np.expand_dims(batch_clouds_resized, axis=1)     # B, 1, N', 3
+                batch_clouds = np.stack(batch_clouds_resized, axis=0)  # B, N', 3
+                batch_clouds = np.expand_dims(batch_clouds_resized, axis=1)  # B, 1, N', 3
 
             # shuffle points
             if shuffle_points:
@@ -635,7 +635,6 @@ class ModelnetData(GenericData) :
 
             # yield
             yield np.squeeze(batch_clouds, axis=1), batch_labels
-
 
     def generate_representative_batch(self,
                                       train,
@@ -704,9 +703,9 @@ class ModelnetData(GenericData) :
                         cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
                         cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                    #elif sampling_method == 'uniform':
+                    # elif sampling_method == 'uniform':
                     #    batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                    #elif sampling_method == 'via_graphs':
+                    # elif sampling_method == 'via_graphs':
                     #    batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
                     elif sampling_method == 'fps':
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
@@ -783,9 +782,9 @@ class ModelnetData(GenericData) :
                         cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
                         cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                    #elif sampling_method == 'uniform':
+                    # elif sampling_method == 'uniform':
                     #    batch_clouds_resized.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                    #elif sampling_method == 'via_graphs':
+                    # elif sampling_method == 'via_graphs':
                     #    batch_clouds_resized.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
                     elif sampling_method == 'fps':
                         batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])
@@ -810,7 +809,7 @@ class ModelnetData(GenericData) :
     def generate_random_batch_multiple_clouds(self, train, batch_size=64, shuffle_files=False,
                                           shuffle_points=False, jitter_points=False,
                                           rotate_pointclouds=False, rotate_pointclouds_up=False,
-                                          sampling_method='random', samples = 1, reshape_flags=[]):
+                                          sampling_method='random', samples=1, reshape_flags=[]):
         """ 
         Take random pointcloud, apply optional operations on each pointclouds and return 
         batch of such pointclouds with labels.
@@ -876,9 +875,9 @@ class ModelnetData(GenericData) :
                                 cloud_point_idxs = np.arange(len(batch_clouds[cloud_idx][0]))
                                 cloud_randm_idxs = np.random.choice(cloud_point_idxs, self.pointcloud_size, replace=False)
                                 batch_clouds_resized_instance.append(batch_clouds[cloud_idx][0][cloud_randm_idxs])
-                            #elif sampling_method == 'uniform':
+                            # elif sampling_method == 'uniform':
                             #    batch_clouds_resized_instance.append(pointcloud_downsample.uniform(batch_clouds[cloud_idx][0]))
-                            #elif sampling_method == 'via_graphs':
+                            # elif sampling_method == 'via_graphs':
                             #    batch_clouds_resized_instance.append(pointcloud_downsample.via_graphs(batch_clouds[cloud_idx][0]))
                             elif sampling_method == 'fps':
                                 batch_clouds_resized.append(batch_clouds[cloud_idx][0][:self.pointcloud_size])

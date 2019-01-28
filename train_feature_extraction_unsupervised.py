@@ -7,6 +7,7 @@
 
 import os
 import sys
+import math
 import datetime
 from tqdm import tqdm
 import shutil
@@ -29,11 +30,12 @@ DISTANCE = 'cosine'
 # DISTANCE = 'euclidian'
 SAMPLING_METHOD = 'fps'
 
-LOAD_MODEL = False
-CALC_DIST = True
+LOAD_MODEL = True
+CALC_DIST = False
 READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
+SHUFFLE_POINTS = True
 READ_BLOCK_METHOD = 'pointnet'
 # PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
@@ -60,7 +62,13 @@ def find_semi_hard_triples_to_train(embeddings, labels, margin):
             distances = np.linalg.norm(embeddings - embeddings[cloud_idx], axis=-1)
         elif DISTANCE == 'cosine':
             numerator = np.squeeze(np.sum(np.multiply(embeddings[cloud_idx][0], embeddings), axis=-1))
-            denominator = (np.linalg.norm(embeddings[cloud_idx][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1)))
+            denominator = (np.linalg.norm(embeddings[cloud_idx][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1)) + 1e-9)
+#             if denominator.shape[0] != np.count_nonzero(denominator):
+#                 print ('Numerator: ', numerator.shape, 'denominator: ', denominator.shape,
+#                        'non zero denominator :', np.count_nonzero(denominator),
+#                        'non zero querry: ', np.count_nonzero(np.linalg.norm(embeddings[cloud_idx][0])),
+#                        'non zero allemb: ', np.count_nonzero(np.squeeze(np.linalg.norm(embeddings, axis=-1))))
+#                 #exit()
             distances = 1 - np.divide(numerator, denominator)
         
         # find hard positive
@@ -226,53 +234,78 @@ def train_features_extraction(name, batch_size, epochs,
             ########################################### BATCHES LOOP #########################################
             ##################################################################################################
 
-            for batch_in_epoch_idx, (clouds, labels) in enumerate(tqdm(data_gen.generate_representative_batch_for_train(
-                        instances_number=INSTANCES_NUMBER, shuffle_points=SHUFFLE_CLOUDS,
-                        shuffle_clouds=True, jitter_points=True, rotate_pointclouds=False,
-                        rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD), total=BATCHES)):
+            for batch_in_epoch_idx, (clouds, labels) in enumerate(tqdm(data_gen.generate_random_batch(
+                train=True, batch_size=40, shuffle_clouds=SHUFFLE_CLOUDS, shuffle_points=SHUFFLE_POINTS,
+                jitter_points=True, rotate_pointclouds=False, rotate_pointclouds_up=ROTATE_CLOUDS_UP,
+                sampling_method=SAMPLING_METHOD), total=int(math.floor(data_gen.pointclouds_train.shape[0] / 40)))):
 
                 ##################################################################################################
-                ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
+                ################################ COPY ALL CLOUDS AND TRANSFORM THEM ##############################
                 ##################################################################################################
 
-                # calc embeddings
-                embeddings = []
-                embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
-                for embedding_input in embedding_inputs:
-                    embedding_input = embedding_input[:, :CLOUD_SIZE, :]  # input dropout
-                    embedding_input = np.expand_dims(embedding_input, axis=1)         
-                    embeddings.append(sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input}))
-                embeddings = np.concatenate(embeddings)
+                clouds_copy = np.copy(clouds)
+                clouds_copy = np.expand_dims(clouds_copy, axis=1)
+                if True:
+                    clouds_copy = modelnet.ModelnetData._shuffle_points_in_batch(clouds_copy)
+                if True:  # jitter_points:
+                    clouds_copy = modelnet.ModelnetData._jitter_batch(clouds_copy)
+                if False:  # rotate_pointclouds:
+                    clouds_copy = modelnet.ModelnetData._rotate_batch(clouds_copy)
+                elif ROTATE_CLOUDS_UP:
+                    clouds_copy = modelnet.ModelnetData._rotate_batch(clouds_copy, random_axis=False)
+                clouds_copy = np.squeeze(clouds_copy, axis=1)
+
+                ##################################################################################################
+                ######################################### GET EMBEDDINGS #########################################
+                ##################################################################################################
+
+                clouds = np.expand_dims(clouds, axis=1)
+                embeddings = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: clouds})
+                clouds_copy = np.expand_dims(clouds_copy, axis=1)
+                embeddings_copy = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: clouds_copy})
                 
-                # Find hard examples to train on
-                pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
-                  
-                # Create triples to train
-                pos_clouds = np.copy(clouds)
-                pos_clouds = pos_clouds[pos_indices, ...]
-                neg_clouds = np.copy(clouds)
-                neg_clouds = neg_clouds[neg_indices, ...]
-                training_inputs = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
-                  
+                ##################################################################################################
+                ############################### FIND SEMIHARD SAMPLES TO TRAIN ON ################################
+                ##################################################################################################
+                
+                clouds_n = []
+                for i in range(40):
+                    
+                    numerator = np.squeeze(np.sum(np.multiply(embeddings[i][0], embeddings_copy[i][0]), axis=-1))
+                    denominator = (np.linalg.norm(embeddings[i][0]) * np.linalg.norm(embeddings_copy[i][0]))
+                    dist_p = 1 - np.divide(numerator, denominator)
+                    
+                    numerator = np.squeeze(np.sum(np.multiply(embeddings[i][0], embeddings), axis=-1))
+                    denominator = (np.linalg.norm(embeddings[i][0]) * np.squeeze(np.linalg.norm(embeddings, axis=-1)))
+                    distances_1 = 1 - np.divide(numerator, denominator)
+                    distances_1[distances_1 <= dist_p] = float('inf')
+                    argmax_dist_1 = np.argmin(distances_1)
+                    
+                    numerator = np.squeeze(np.sum(np.multiply(embeddings[i][0], embeddings_copy), axis=-1))
+                    denominator = (np.linalg.norm(embeddings[i][0]) * np.squeeze(np.linalg.norm(embeddings_copy, axis=-1)))
+                    distances_2 = 1 - np.divide(numerator, denominator)
+                    distances_2[distances_2 <= dist_p] = float('inf')
+                    argmax_dist_2 = np.argmin(distances_2)
+                    
+                    
+                    if distances_1[argmax_dist_1] < distances_2[argmax_dist_2]:
+                        clouds_n.append(np.copy(clouds[argmax_dist_1]))
+                    else:
+                        clouds_n.append(np.copy(clouds_copy[argmax_dist_2]))
+                clouds_n = np.array(clouds_n)
+                training_inputs = np.concatenate([clouds, clouds_copy, clouds_n], axis=1)
+             
                 ##################################################################################################
                 ############################################# TRAIN ##############################################
                 ##################################################################################################
- 
-                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
-                training_labels = np.split(labels, INSTANCES_NUMBER)
-                for training_input, training_label in zip(training_inputs, training_labels):
-                    training_input = training_input[:, :, :CLOUD_SIZE, :]  # input dropout
-                    global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
-                        [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
-                         model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
-                                                                                   model.margin : [margin],
-                                                                                   model.placeholder_is_tr : True,
-                                                                                   model.classes_learning_weights : class_weights})
-                    if np.isnan(training_pos).any():
-                        print ("POS_DIST", training_pos)
-                    if np.isnan(training_neg).any():  
-                        print ("NEG_DIST", training_neg)
 
+                global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
+                    [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
+                     model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_inputs,
+                                                                               model.margin : [margin],
+                                                                               model.placeholder_is_tr : True,
+                                                                               model.classes_learning_weights : class_weights})
+ 
             ##################################################################################################
             ############################################# LOG ################################################
             ##################################################################################################
@@ -282,7 +315,9 @@ def train_features_extraction(name, batch_size, epochs,
             # Loggin summary
             summary_log = tf.Summary()
             summary_log.value.add(tag="%smargin" % "", simple_value=margin)
-            summary_log.value.add(tag="%snon_zero" % "",imple_value=training_non_zero)
+            summary_log.value.add(tag="%snon_zero" % "", simple_value=training_non_zero)
+            # summary_log.value.add(tag="%spos_dist" % "", simple_value=training_pos)
+            # summary_log.value.add(tag="%sneg_dist" % "", simple_value=training_neg)
 
             # pos/neg dist
             if CALC_DIST:  # and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
@@ -305,7 +340,7 @@ def train_features_extraction(name, batch_size, epochs,
             ##################################################################################################
         
             if epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1:
-                save_path = model.save_model(sess, nam
+                save_path = model.save_model(sess, name)
                 print ("Model saved in file: %s" % save_path)
 
 def test_features_extraction(data_gen, model, sess, partial_score=True):

@@ -23,21 +23,25 @@ from deepclouds.model import DeepCloudsModel
 
 from sklearn.metrics import f1_score
 
-CLOUD_SIZE = 1024
-INPUT_CLOUD_DROPOUT_KEEP = 1.00
 
-CLASSIFIER_MODEL_LOAD = False
-CLASSIFIER_MODEL_TRAIN = True
-SYNTHETIC = False
+CLOUD_SIZE = 1024
+
+DISTANCE = 'cosine'
+# DISTANCE = 'euclidian'
+SAMPLING_METHOD = 'fps'
+
 READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
+SHUFFLE_POINTS = True
 READ_BLOCK_METHOD = 'pointnet'
+# PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
-#PROCESS_BLOCK_METHOD = 'attention-rnn'
-SAMPLING_METHOD = 'fps'
-#DISTANCE = 'cosine'
-DISTANCE = 'euclidian'
+
+CLOUD_SIZE = 1024
+INPUT_CLOUD_DROPOUT_KEEP = 1.00
+CLASSIFIER_MODEL_LOAD = False
+CLASSIFIER_MODEL_TRAIN = True
 CLASSIFIER_REG_WEIGHT = 0.001
 CLASSIFIER_DROP_KEEPPROB = 0.70
 
@@ -55,7 +59,7 @@ CLASSIFIER_DROP_KEEPPROB = 0.70
 
 def train_classification(name, batch_size, epochs, learning_rate, device,
                          read_block_units, process_block_steps,
-                         classifier_layers = [512, 256, 128, 64, 40]):
+                         classifier_layers=[512, 256, 128, 64, 40]):
     """
     Train deepclouds classificator with synthetic data.
     """
@@ -63,12 +67,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     # Reset
     tf.reset_default_graph()
 
-    # Generate data if needed
-    if SYNTHETIC:
-        data_gen = modelnet.SyntheticData(pointcloud_size=CLOUD_SIZE, permuted=SHUFFLE_CLOUDS,
-                                          rotated_up=ROTATE_CLOUDS_UP, rotated_rand=False)
-    else:
-        data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
+    # Data gen
+    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -77,9 +77,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             features_model = DeepCloudsModel(train=False,
-                                             batch_size = batch_size,
-                                             pointcloud_size = int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP),
-                                             read_block_units = READ_BLOCK_UNITS,
+                                             batch_size=batch_size,
+                                             pointcloud_size=int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP),
+                                             read_block_units=READ_BLOCK_UNITS,
                                              process_block_steps=process_block_steps,
                                              normalize_embedding=True, verbose=True,
                                              input_t_net=True, feature_t_net=True,
@@ -108,7 +108,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     ##################################################################################################
 
     config = tf.ConfigProto(allow_soft_placement=True)
-    config.gpu_options.allow_growth=True
+    config.gpu_options.allow_growth = True
     with tf.Session(config=config) as sess:
 
         ##############################################################################################
@@ -126,7 +126,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 
         log_model_dir = os.path.join(df.LOGS_DIR, classifier_model.get_model_name())
         writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
-        #writer.add_graph(sess.graph)
+        # writer.add_graph(sess.graph)
 
         ##############################################################################################
         ##################################### EPOCH TRAINING LOOP ####################################
@@ -143,8 +143,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 ##################################### BATCH TRAINING LOOP ################################
                 ##########################################################################################
 
-                for clouds, labels in data_gen.generate_random_batch(train = True,
-                                                                     batch_size = batch_size,
+                for clouds, labels in data_gen.generate_random_batch(train=True,
+                                                                     batch_size=batch_size,
                                                                      shuffle_points=SHUFFLE_CLOUDS,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
@@ -156,7 +156,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     ##################################################################################################
 
                     # count embeddings
-                    embedding_input = clouds[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+                    embedding_input = clouds[:, :int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
                     embedding_input = np.expand_dims(embedding_input, axis=1)
                     embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input,
                                                                                       features_model.placeholder_is_tr : False})
@@ -214,9 +214,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             print ("==========================TRAIN ACCURACIES==========================")
             for class_idx, class_name in enumerate(data_gen.class_names):
                 
-                true_pos = float(np.sum(train_conf_mat[class_idx]))                                            # sum in rows
+                true_pos = float(np.sum(train_conf_mat[class_idx]))  # sum in rows
                 flse_pos = float(np.sum(train_conf_mat[:, class_idx]) - train_conf_mat[class_idx, class_idx])  # sum in cols without querry
-                flse_neg = float(np.sum(train_conf_mat[class_idx]) - train_conf_mat[class_idx, class_idx])     # sum in rows without querry
+                flse_neg = float(np.sum(train_conf_mat[class_idx]) - train_conf_mat[class_idx, class_idx])  # sum in rows without querry
                 
                 precsn = true_pos / (true_pos + flse_pos)
                 recall = true_pos / (true_pos + flse_neg)
@@ -230,9 +230,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
             print ("==========================TEST ACCURACIES==========================")
             for class_idx, class_name in enumerate(data_gen.class_names):
                 
-                true_pos = float(np.sum(test_conf_mat[class_idx]))                                            # sum in rows
+                true_pos = float(np.sum(test_conf_mat[class_idx]))  # sum in rows
                 flse_pos = float(np.sum(test_conf_mat[:, class_idx]) - test_conf_mat[class_idx, class_idx])  # sum in cols without querry
-                flse_neg = float(np.sum(test_conf_mat[class_idx]) - test_conf_mat[class_idx, class_idx])     # sum in rows without querry
+                flse_neg = float(np.sum(test_conf_mat[class_idx]) - test_conf_mat[class_idx, class_idx])  # sum in rows without querry
                 
                 precsn = true_pos / (true_pos + flse_pos)
                 recall = true_pos / (true_pos + flse_neg)
@@ -242,9 +242,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 class_acc_test.append(acc)
                 print (class_name, acc, f1_scr)
 
-            print ("TRAN_HIT = ", train_hit, "TRAN_ALL = ", train_all, "TRAIN_ACC" , train_hit/train_all)
+            print ("TRAN_HIT = ", train_hit, "TRAN_ALL = ", train_all, "TRAIN_ACC" , train_hit / train_all)
             print ("TRAIN_CLASS_ACC = ", np.mean(class_acc))
-            print ("TEST_HIT = ", test_hit, "TEST_ALL = ", test_all, "TEST_ACC" , test_hit/test_all)
+            print ("TEST_HIT = ", test_hit, "TEST_ALL = ", test_all, "TEST_ACC" , test_hit / test_all)
             print ("TEST_CLASS_ACC = ", np.mean(class_acc_test))
 
             plot_confusion_matrix(train_conf_mat, classes=data_gen.class_names, normalize=False, title='Train confusion matrix unnorm')
@@ -274,12 +274,12 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 #                 ################################## SAVE CLASSIFICATION MODEL #####################################
 #                 ##################################################################################################
 # 
-              #if (epoch+1) % checkpoint_skip_epochs == 0:
+              # if (epoch+1) % checkpoint_skip_epochs == 0:
 
             # Save model
             save_path = classifier_model.save_model(sess, name)
             print "Model saved in file: %s" % save_path
-            #print "MAX ACC = ", np.max(accuracies)
+            # print "MAX ACC = ", np.max(accuracies)
 
         else:
             accuracies = []
@@ -296,7 +296,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 sys.stdout.flush()
                 for clouds, labels in data_gen.generate_random_batch(False, batch_size=test_batch_size,
                                                                      shuffle_points=False,
-                                                                     rotate_pointclouds_up=False):# 400 test examples / 16 clouds = 25 batches
+                                                                     rotate_pointclouds_up=False):  # 400 test examples / 16 clouds = 25 batches
                     
                     sys.stdout.write(".")
                     sys.stdout.flush()
@@ -308,7 +308,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     labels_padded = np.concatenate((labels, labels_padding), axis=0)
 
                     # count embeddings
-                    embedding_input = embedding_input[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+                    embedding_input = embedding_input[:, :int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
                     embedding_input = np.stack([clouds_padded], axis=1)
                     embeddings = sess.run(features_model.get_embeddings(),
                                                feed_dict={features_model.placeholder_embdg: embedding_input,
@@ -327,8 +327,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     for cloud_idx in range(len(clouds)):
                         hit[labels[cloud_idx]] = hit[labels[cloud_idx]] + (predictions_args[cloud_idx] == labels[cloud_idx])
                         all[labels[cloud_idx]] = all[labels[cloud_idx]] + 1
-                    #hit = hit + sum(predictions_args == labels)
-                    #all = all + len(labels)
+                    # hit = hit + sum(predictions_args == labels)
+                    # all = all + len(labels)
                     for idx in range(len(labels)):
                         batch_votes.append(predictions[idx])
                         batch_labels.append(labels[idx])
@@ -337,15 +337,15 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 asd_all = []
                 print "\n"
                 for cloud_idx in range(40):
-                    print "Accuracy: ", cloud_idx, "  :  ", hit[cloud_idx]/all[cloud_idx]
-                    asd_all.append(hit[cloud_idx]/all[cloud_idx])
+                    print "Accuracy: ", cloud_idx, "  :  ", hit[cloud_idx] / all[cloud_idx]
+                    asd_all.append(hit[cloud_idx] / all[cloud_idx])
                     if cloud_idx not in [3, 15, 32, 33, 38, 39]:
-                        asd_best.append(hit[cloud_idx]/all[cloud_idx])
+                        asd_best.append(hit[cloud_idx] / all[cloud_idx])
 
                 print "ALL      :", np.mean(asd_all)
                 print "BEST ONLY:", np.mean(asd_best)
-                print "ACCURACY :", np.sum(hit.values())/np.sum(all.values())
-                print "AVG CLASS ACCURACY :", np.mean(np.array(hit.values(),np.float32)/np.array(all.values(), np.float32))
+                print "ACCURACY :", np.sum(hit.values()) / np.sum(all.values())
+                print "AVG CLASS ACCURACY :", np.mean(np.array(hit.values(), np.float32) / np.array(all.values(), np.float32))
 
                 exit()        
                 accuracies.append(hit / all)
@@ -361,9 +361,9 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
 def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model):
 
     all_predcs = []
-    all_labels =[]
-    for clouds, labels in data_gen.generate_random_batch(train, #16):# 400 test examples / 16 clouds = 25 batches
-                                                         batch_size = 16,
+    all_labels = []
+    for clouds, labels in data_gen.generate_random_batch(train,  # 16):# 400 test examples / 16 clouds = 25 batches
+                                                         batch_size=16,
                                                          shuffle_points=SHUFFLE_CLOUDS,
                                                          jitter_points=True,
                                                          rotate_pointclouds=False,
@@ -377,7 +377,7 @@ def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model
         labels_padded = np.concatenate((labels, labels_padding), axis=0)
 
         # count embeddings
-        clouds_padded = clouds_padded[:, :int(CLOUD_SIZE*INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
+        clouds_padded = clouds_padded[:, :int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
         embedding_input = np.stack([clouds_padded], axis=1)
         embeddings = sess.run(features_model.get_embeddings(),
                               feed_dict={features_model.placeholder_embdg: embedding_input,
