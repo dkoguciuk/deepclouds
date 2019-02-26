@@ -18,33 +18,34 @@ import deepclouds.defines as df
 import sklearn.metrics as metrics
 import scipy.spatial.distance as cos_dist
 from timeit import default_timer as timer
-import deepclouds.modelnet_data as modelnet
+import deepclouds.data_provider as data_provider
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
+from tensorflow.python import debug as tf_debug
 
 
 CLOUD_SIZE = 1024
 
-DISTANCE = 'cosine'
-# DISTANCE = 'euclidian'
+DISTANCE = 'euclidian'
 SAMPLING_METHOD = 'fps'
 
-LOAD_MODEL = False
+LOAD_MODEL = True
 CALC_DIST = True
 READ_BLOCK_UNITS = [256]
 ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
 READ_BLOCK_METHOD = 'pointnet'
-# PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
 
-INSTANCES_NUMBER = 10  # 889 / 10 = 88 batches      # train = 889 for each cloud / 127 = 7 batches
-BATCHES = 88
-REGULARIZATION_WEIGHT = 0.01
+BATCHES = 8
+INSTANCES = 4
+REGULARIZATION_WEIGHT = 0.0
 
 # LOGGING
-MODEL_SAVE_AFTER_EPOCHS = 25
+MODEL_SAVE_AFTER_EPOCHS = 1000
 
+classes_no = 4
+instances_no = 2
 
 def find_semi_hard_triples_to_train(embeddings, labels, margin):
     
@@ -153,7 +154,7 @@ def train_features_extraction(name, batch_size, epochs,
     ########################################## DATA GENERATOR ########################################
     ##################################################################################################
                 
-    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
+    data_gen = data_provider.ModelNet40(pointcloud_size=CLOUD_SIZE, clusterize=False)
 
     ##################################################################################################
     ######################################### DEEPCLOUDS MODEL #######################################
@@ -162,7 +163,7 @@ def train_features_extraction(name, batch_size, epochs,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             model = DeepCloudsModel(train=True,
-                                    batch_size=data_gen.CLASSES_COUNT, pointcloud_size=CLOUD_SIZE,
+                                    classes_no=classes_no, instances_no=instances_no, pointcloud_size=CLOUD_SIZE,
                                     read_block_units=READ_BLOCK_UNITS, process_block_steps=[4],
                                     learning_rate=learning_rate, gradient_clip=gradient_clip,
                                     normalize_embedding=True, verbose=True,
@@ -197,7 +198,7 @@ def train_features_extraction(name, batch_size, epochs,
         ##################################################################################################
         
         log_model_dir = os.path.join(df.LOGS_DIR, model.get_model_name())
-        writer = tf.summary.FileWriter(os.path.join(log_model_dir, name))
+        writer = tf.summary.FileWriter(os.path.join(log_model_dir, name), sess.graph)
  
         histograms = []
         variables_names = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope="end-to-end")
@@ -209,104 +210,64 @@ def train_features_extraction(name, batch_size, epochs,
         ########################################### EPOCHS LOOP ##########################################
         ##################################################################################################
 
-        for epoch in range(epochs):
+        for epoch in tqdm(range(epochs)):
         
             ##################################################################################################
             ########################################## CLASS WEIGHTS #########################################
             ##################################################################################################  
             
-#             # calc class weights
-#             if epoch % 1 == 0:
-#                 class_weights = calc_inner_class_distance(sess, data_gen, model, margin)
-#                 print ("WEIGHTS COMPUTED...")
-            # class_weights = np.ones(40, dtype=np.float32) / 4;
-            class_weights = np.ones(data_gen.CLASSES_COUNT, dtype=np.float32) / data_gen.CLASSES_COUNT
+            class_weights = np.ones(data_gen.classes_count, dtype=np.float32) / data_gen.classes_count
 
             ##################################################################################################
             ########################################### BATCHES LOOP #########################################
             ##################################################################################################
 
-            for batch_in_epoch_idx, (clouds, labels) in enumerate(tqdm(data_gen.generate_representative_batch_for_train(
-                        instances_number=INSTANCES_NUMBER, shuffle_points=SHUFFLE_CLOUDS,
-                        shuffle_clouds=True, jitter_points=True, rotate_pointclouds=False,
-                        rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD), total=BATCHES)):
+            for clouds, labels in data_gen.generate_batch_c_i(
+                        classes_no = classes_no, instances_no = instances_no,
+                        shuffle_points=SHUFFLE_CLOUDS, shuffle_clouds=True,
+                        jitter_points=True, rotate_pointclouds=False,
+                        rotate_pointclouds_up=ROTATE_CLOUDS_UP, sampling_method=SAMPLING_METHOD):
 
-                ##################################################################################################
-                ################################# FIND SEMI HARD TRIPLETS TO LEARN ###############################
-                ##################################################################################################
 
-                # calc embeddings
-                embeddings = []
-                embedding_inputs = np.split(clouds, INSTANCES_NUMBER)
-                for embedding_input in embedding_inputs:
-                    embedding_input = embedding_input[:, :CLOUD_SIZE, :]  # input dropout
-                    embedding_input = np.expand_dims(embedding_input, axis=1)         
-                    embeddings.append(sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: embedding_input}))
-                embeddings = np.concatenate(embeddings)
+                clouds = np.reshape(clouds, (classes_no*instances_no, CLOUD_SIZE, 3))
+                global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, data_after_step_5, triplets  = sess.run( 
+                    [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
+                     model.get_summary(), model.data_after_step_5, model.triplets], feed_dict={model.input_point_clouds: clouds,
+                                                                               model.margin : [margin],
+                                                                               model.placeholder_is_tr : True})
                 
-                # Find hard examples to train on
-                pos_indices, neg_indices, non_zero = find_semi_hard_triples_to_train(embeddings, labels, margin)
-                  
-                # Create triples to train
-                pos_clouds = np.copy(clouds)
-                pos_clouds = pos_clouds[pos_indices, ...]
-                neg_clouds = np.copy(clouds)
-                neg_clouds = neg_clouds[neg_indices, ...]
-                training_inputs = np.stack([clouds, pos_clouds, neg_clouds], axis=1)
-                  
+             
+            if epoch % 10 == 9: 
+                
+                # Loggin summary
+                summary_log = tf.Summary()
+                summary_log.value.add(tag="%sdist_pos" % "", simple_value=np.sum(training_pos))
+                summary_log.value.add(tag="%sdist_neg" % "", simple_value=np.sum(training_neg))
+    
                 ##################################################################################################
-                ############################################# TRAIN ##############################################
+                ############################################# LOG ################################################
                 ##################################################################################################
- 
-                training_inputs = np.split(training_inputs, INSTANCES_NUMBER)
-                training_labels = np.split(labels, INSTANCES_NUMBER)
-                for training_input, training_label in zip(training_inputs, training_labels):
-                    training_input = training_input[:, :, :CLOUD_SIZE, :]  # input dropout
-                    global_batch_idx, _, training_loss, training_pos, training_neg, summary_train, training_non_zero = sess.run(
-                        [model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
-                         model.get_summary(), model.non_zero_triplets], feed_dict={model.placeholder_train: training_input,
-                                                                                   model.margin : [margin],
-                                                                                   model.placeholder_is_tr : True,
-                                                                                   model.classes_learning_weights : class_weights})
-                    if np.isnan(training_pos).any():
-                        print ("POS_DIST", training_pos)
-                    if np.isnan(training_neg).any():  
-                        print ("NEG_DIST", training_neg)
-
-            ##################################################################################################
-            ############################################# LOG ################################################
-            ##################################################################################################
- 
-#                if global_batch_idx % (BATCHES) == 0:
-
-            # Loggin summary
-            summary_log = tf.Summary()
-            summary_log.value.add(tag="%smargin" % "", simple_value=margin)
-            summary_log.value.add(tag="%snon_zero" % "",imple_value=training_non_zero)
-
-            # pos/neg dist
-            if CALC_DIST:  # and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
-                pos_man, neg_man = test_features_extraction(data_gen, model, sess)
-                summary_log.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
-                print ("Epoch: %06d batch: %03d loss: %09f dist_diff: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, neg_man - pos_man, training_non_zero, margin, learning_rate))
-            else:
-                print ("Epoch: %06d batch: %03d loss: %09f non_zero: %03d margin: %09f learning_rate: %06f" % (epoch + 1, batch_in_epoch_idx, training_loss, training_non_zero, margin, learning_rate))
-               
-            # Variables histogram
-            summary_histograms = sess.run(hist_summary)
-            writer.add_summary(summary_histograms, global_batch_idx)             
-
-            # Write summary
-            writer.add_summary(summary_log, global_batch_idx)
-            writer.add_summary(summary_train, global_batch_idx)
-
-            ##################################################################################################
-            ########################################## SAVE MODEL ############################################
-            ##################################################################################################
-        
-            if epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1:
-                save_path = model.save_model(sess, nam
-                print ("Model saved in file: %s" % save_path)
+     
+                # pos/neg dist
+                if CALC_DIST:  # and (epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1):
+                    pos_man, neg_man = test_features_extraction(data_gen, model, sess)
+                    summary_log.value.add(tag="%spos_neg_test_dist" % "", simple_value=neg_man - pos_man)
+                   
+                # Variables histogram
+                summary_histograms = sess.run(hist_summary)
+                writer.add_summary(summary_histograms, global_batch_idx)             
+    
+                # Write summary
+                writer.add_summary(summary_log, global_batch_idx)
+                writer.add_summary(summary_train, global_batch_idx)
+    
+                ##################################################################################################
+                ########################################## SAVE MODEL ############################################
+                ##################################################################################################
+            
+                if epoch % MODEL_SAVE_AFTER_EPOCHS == MODEL_SAVE_AFTER_EPOCHS - 1:
+                    save_path = model.save_model(sess, name)
+                    print ("Model saved in file: %s" % save_path)
 
 def test_features_extraction(data_gen, model, sess, partial_score=True):
     """
@@ -316,13 +277,13 @@ def test_features_extraction(data_gen, model, sess, partial_score=True):
     # Get test embeddings
     batches = 0
     test_embeddings = { k : [] for k in range(40)}
-    for clouds, labels in data_gen.generate_random_batch(False, 40, sampling_method=SAMPLING_METHOD):  # 400 test examples / 80 clouds = 5 batches
+    for clouds, labels in data_gen.generate_random_batch(False, batch_size=classes_no*instances_no, sampling_method=SAMPLING_METHOD):  # 400 test examples / 80 clouds = 5 batches
 
         # count embeddings
-        test_embedding_input = np.stack([clouds], axis=1)
-        test_embedding = sess.run(model.get_embeddings(), feed_dict={model.placeholder_embdg: test_embedding_input,
+        #test_embedding_input = np.stack([clouds], axis=1)
+        test_embedding = sess.run(model.data_after_step_5, feed_dict={model.input_point_clouds: clouds,
                                                                      model.placeholder_is_tr : False})
-        test_embedding = np.squeeze(test_embedding, axis=1)
+        #test_embedding = np.squeeze(test_embedding, axis=1)
     
         # add embeddings
         for cloud_idx in range(labels.shape[0]):

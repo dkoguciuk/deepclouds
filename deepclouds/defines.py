@@ -29,24 +29,29 @@ DATA_DIR = os.path.join(ROOT_DIR, "data")
 Data directory for the modelnet data to be downloaded and stored.
 """
 
-DATA_URL = 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'
+DATA_MODELNET40_URL = 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'
 """
 URL to the modelnet data.
 """
 
-DATA_MODELNET_DIR = os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')
+DATA_MODELNET40_DIR = os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')
 """
 Extracted modelnet data directory.
 """
 
-CLASS_NAMES_FILE = os.path.join(DATA_MODELNET_DIR, 'shape_names.txt')
+CLASS_NAMES_FILE = os.path.join(DATA_MODELNET40_DIR, 'shape_names.txt')
 """
 File with class names.
 """
 
-DATA_SYNTHETIC_DIR = os.path.join(DATA_DIR, 'synthetic')
+DATA_SHAPENET55_DIR = os.path.join(DATA_DIR, 'shapenet_core55_1024')
 """
-Synthetic data directory.
+Directory with shapenet_core55 containing h5 files.
+"""
+
+DATA_MODELNET40_SAMPLED_DIR = os.path.join(DATA_DIR, 'modelnet40_downsampled')
+"""
+Downsampled ModelNet40 data directory.
 """
 
 LOGS_DIR = os.path.join(ROOT_DIR, "logs")

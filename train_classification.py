@@ -17,7 +17,7 @@ import train_with_hparam
 import matplotlib.pyplot as plt
 import deepclouds.defines as df
 import sklearn.metrics as metrics
-import deepclouds.modelnet_data as modelnet
+import deepclouds.data_provider as data_provider
 from deepclouds.classifiers import MLPClassifier
 from deepclouds.model import DeepCloudsModel
 
@@ -26,8 +26,7 @@ from sklearn.metrics import f1_score
 
 CLOUD_SIZE = 1024
 
-DISTANCE = 'cosine'
-# DISTANCE = 'euclidian'
+DISTANCE = 'euclidian'
 SAMPLING_METHOD = 'fps'
 
 READ_BLOCK_UNITS = [256]
@@ -35,7 +34,6 @@ ROTATE_CLOUDS_UP = True
 SHUFFLE_CLOUDS = True
 SHUFFLE_POINTS = True
 READ_BLOCK_METHOD = 'pointnet'
-# PROCESS_BLOCK_METHOD = 'attention-rnn'
 PROCESS_BLOCK_METHOD = 'max-pool'
 
 CLOUD_SIZE = 1024
@@ -44,6 +42,9 @@ CLASSIFIER_MODEL_LOAD = False
 CLASSIFIER_MODEL_TRAIN = True
 CLASSIFIER_REG_WEIGHT = 0.001
 CLASSIFIER_DROP_KEEPPROB = 0.70
+
+classes_no = 8
+instances_no = 8
 
 #    REG    DROP    TRAIN   TEST
 #    0.0    0.25    89.4    75.8
@@ -68,7 +69,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     tf.reset_default_graph()
 
     # Data gen
-    data_gen = modelnet.ModelnetData(pointcloud_size=CLOUD_SIZE, clusterize=False)
+    data_gen = data_provider.ModelNet40(pointcloud_size=CLOUD_SIZE, clusterize=False)
 
     ##################################################################################################
     ################################## FEATURES EXTRACTION MODEL #####################################
@@ -77,8 +78,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
     with tf.variable_scope("end-to-end"):
         with tf.device(device):
             features_model = DeepCloudsModel(train=False,
-                                             batch_size=batch_size,
-                                             pointcloud_size=int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP),
+                                             classes_no=classes_no, instances_no=instances_no, pointcloud_size=CLOUD_SIZE,
                                              read_block_units=READ_BLOCK_UNITS,
                                              process_block_steps=process_block_steps,
                                              normalize_embedding=True, verbose=True,
@@ -144,7 +144,7 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                 ##########################################################################################
 
                 for clouds, labels in data_gen.generate_random_batch(train=True,
-                                                                     batch_size=batch_size,
+                                                                     batch_size=classes_no*instances_no,
                                                                      shuffle_points=SHUFFLE_CLOUDS,
                                                                      jitter_points=True,
                                                                      rotate_pointclouds=False,
@@ -155,12 +155,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
                     ######################################### GET EMBEDDING ##########################################
                     ##################################################################################################
 
-                    # count embeddings
-                    embedding_input = clouds[:, :int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
-                    embedding_input = np.expand_dims(embedding_input, axis=1)
-                    embeddings = sess.run(features_model.get_embeddings(), feed_dict={features_model.placeholder_embdg: embedding_input,
-                                                                                      features_model.placeholder_is_tr : False})
-                    embeddings = np.squeeze(embeddings)
+                    embeddings = sess.run(features_model.data_after_step_5, feed_dict={features_model.input_point_clouds: clouds,
+                                                                                       features_model.placeholder_is_tr : False})
 
                     ##################################################################################################
                     ############################################# TRAIN ##############################################
@@ -277,8 +273,8 @@ def train_classification(name, batch_size, epochs, learning_rate, device,
               # if (epoch+1) % checkpoint_skip_epochs == 0:
 
             # Save model
-            save_path = classifier_model.save_model(sess, name)
-            print "Model saved in file: %s" % save_path
+            # save_path = classifier_model.save_model(sess, name)
+            # print "Model saved in file: %s" % save_path
             # print "MAX ACC = ", np.max(accuracies)
 
         else:
@@ -378,11 +374,8 @@ def calc_acc(train, data_gen, batch_size, sess, features_model, classifier_model
 
         # count embeddings
         clouds_padded = clouds_padded[:, :int(CLOUD_SIZE * INPUT_CLOUD_DROPOUT_KEEP), :]  # input dropout
-        embedding_input = np.stack([clouds_padded], axis=1)
-        embeddings = sess.run(features_model.get_embeddings(),
-                              feed_dict={features_model.placeholder_embdg: embedding_input,
-                                         features_model.placeholder_is_tr : False})
-        embeddings = np.squeeze(embeddings)
+        embeddings = sess.run(features_model.data_after_step_5, feed_dict={features_model.input_point_clouds: clouds_padded,
+                                                                                       features_model.placeholder_is_tr : False})
 
 
         # One hot

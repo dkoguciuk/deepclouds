@@ -60,7 +60,31 @@ class Conv2DVars(object):
             kernel_shape = [self.kernel_h, self.kernel_w, self.num_in_channels, self.num_out_channels]
             self.kernel = _variable_with_weight_decay('weights', shape=kernel_shape, use_xavier=use_xavier, stddev=stddev, wd=weight_decay)
             self.biases = _variable_on_cpu('biases', [self.num_out_channels], tf.constant_initializer(0.0))
-            
+   
+
+def conv2d_on_the_fly(input,
+                      num_in_channels, num_out_channels, kernel_size, stride=[1, 1], use_xavier=True, stddev=1e-3, weight_decay=0.0,
+                      padding='SAME', activation_fn=tf.nn.relu, bn=False, bn_decay=None,
+                      is_training=None):
+
+    kernel_h, kernel_w = kernel_size
+    kernel_shape = [kernel_h, kernel_w, num_in_channels, num_out_channels]
+    kernel = _variable_with_weight_decay('weights', shape=kernel_shape, use_xavier=use_xavier, stddev=stddev, wd=weight_decay)
+    biases = _variable_on_cpu('biases', [num_out_channels], tf.constant_initializer(0.0))
+
+    stride_h, stride_w = stride
+    outputs = tf.nn.conv2d(input, kernel, [1, stride_h, stride_w, 1], padding=padding)
+    outputs = tf.nn.bias_add(outputs, biases)
+
+    if bn:
+        print ("BATCH NORM!")
+        outputs = batch_norm(outputs, batchnorm_vars, is_training, [0,1,2], bn_decay=bn_decay)
+
+    if activation_fn is not None:
+        outputs = activation_fn(outputs)
+
+    return outputs
+
 def conv2d(input, conv2d_vars, batchnorm_vars,
            stride=[1, 1],
            padding='SAME',
@@ -96,6 +120,24 @@ class FullyConnVars(object):
             self.weights = _variable_with_weight_decay('weights', shape=[num_inputs, num_outputs],
                                                        use_xavier=use_xavier, stddev=stddev, wd=weight_decay)
             self.biases = _variable_on_cpu('biases', [num_outputs], tf.constant_initializer(0.0))
+
+def fully_connected_on_the_fly(input, num_inputs, num_outputs, use_xavier=True, stddev=1e-3, weight_decay=0.0,
+                 activation_fn=tf.nn.relu, bn=False, bn_decay=None, is_training=None):
+    
+    weights = _variable_with_weight_decay('weights', shape=[num_inputs, num_outputs],
+                                          use_xavier=use_xavier, stddev=stddev, wd=weight_decay)
+    biases = _variable_on_cpu('biases', [num_outputs], tf.constant_initializer(0.0))
+    
+    outputs = tf.matmul(input, weights)
+    outputs = tf.nn.bias_add(outputs, biases)
+ 
+    if bn:
+        outputs = batch_norm(outputs, batchnorm_vars, is_training, [0,], bn_decay)
+
+    if activation_fn is not None:
+        outputs = activation_fn(outputs)
+            
+    return outputs
 
 def fully_connected(input, fullyconn_vars, batchnorm_vars,
                  activation_fn=tf.nn.relu,
@@ -136,6 +178,8 @@ def batch_norm(inputs, batchnorm_vars, is_training, moments_dims, bn_decay):
                 return tf.identity(batch_mean), tf.identity(batch_var)
     
         # ema.average returns the Variable holding the average of var.
+        print ("COND! batch_norm")
+        exit()
         mean, var = tf.cond(is_training, mean_var_with_update, lambda: (ema.average(batch_mean), ema.average(batch_var)))
         normed = tf.nn.batch_normalization(inputs, mean, var, batchnorm_vars.beta, batchnorm_vars.gamma, 1e-3)
         return normed
@@ -284,6 +328,29 @@ def conv3d(inputs,
       outputs = activation_fn(outputs)
     return outputs
 
+def max_pool2d_on_the_fly(inputs,
+               kernel_size,
+               stride=[2, 2],
+               padding='VALID'):
+    """ 2D max pooling.
+    
+    Args:
+      inputs: 4-D tensor BxHxWxC
+      kernel_size: a list of 2 ints
+      stride: a list of 2 ints
+    
+    Returns:
+      Variable tensor
+    """
+  
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+    outputs = tf.nn.max_pool(inputs,
+                             ksize=[1, kernel_h, kernel_w, 1],
+                             strides=[1, stride_h, stride_w, 1],
+                             padding=padding)
+                             #name=sc.name)
+    return outputs
 
 def max_pool2d(inputs,
                kernel_size,
@@ -412,7 +479,9 @@ def batch_norm_template(inputs, is_training, scope, moments_dims, bn_decay):
     batch_mean, batch_var = tf.nn.moments(inputs, moments_dims, name='moments')
     decay = bn_decay if bn_decay is not None else 0.9
     ema = tf.train.ExponentialMovingAverage(decay=decay)
-    # Operator that maintains moving averages of variables.
+    # Operator that maintains moving averages of variables
+    print ("COND! batch_norm_template")
+    exit()
     ema_apply_op = tf.cond(is_training,
                            lambda: ema.apply([batch_mean, batch_var]),
                            lambda: tf.no_op())
