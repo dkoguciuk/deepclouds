@@ -29,9 +29,9 @@ else:
     import builtins as excpt
     
 import numpy as np
-#import pointcloud_downsample
 import numpy.core.umath_tests as nm
 import deepclouds.defines as df
+
 
 class GenericDataset(object):
     """

@@ -1,11 +1,10 @@
 import os
-import sys
 import time
+import inspect
+import importlib
 import numpy as np
 import tensorflow as tf
-import deepclouds.defines as df
-import deepclouds.tf_util as tf_util
-from deepclouds.my_lstm_cell import MyLSTMCell
+from deepclouds.backbones.pointnet import PointNet
 
 
 class GenericModel(object):
@@ -74,7 +73,7 @@ class GenericModel(object):
         name = model_name + time.strftime('%Y-%m-%d_%H:%M:%S', time.localtime()) + ".ckpt"
         return saver.save(session, os.path.join("models_feature_extractor", name)) 
 
-    def _triplet_loss(self, embedding_a, embedding_p, embedding_n, transformation_matrix, regularization_weight):
+    def _triplet_loss(self, embedding_a, embedding_p, embedding_n):
         """
         Define tripplet loss tensor.
 
@@ -111,8 +110,7 @@ class GenericModel(object):
                 final_loss = tf.reduce_sum(self.soft_loss)
             return final_loss
         
-    def _triplet_cosine_loss(self, embedding_a, embedding_p, embedding_n,
-                             transformation_matrix, regularization_weight):  # , labels_a, classes_learning_weights):
+    def _triplet_cosine_loss(self, embedding_a, embedding_p, embedding_n):
         """
         Define tripplet loss tensor.
 
@@ -152,15 +150,15 @@ positive cloud of size
                 self.non_zero_triplets = tf.count_nonzero(self.basic_loss)
                 self.summaries.append(tf.summary.scalar('non_zero_triplets', self.non_zero_triplets))
 
-                K = transformation_matrix.get_shape()[1].value
-                mat_diff = tf.matmul(transformation_matrix, tf.transpose(transformation_matrix, perm=[0, 2, 1]))
-                mat_diff -= tf.constant(np.eye(K), dtype=tf.float32)
-                mat_diff_loss = tf.nn.l2_loss(mat_diff)
-                batch_size = transformation_matrix.get_shape()[0]
-                reg_loss = mat_diff_loss * regularization_weight * tf.to_float(self.non_zero_triplets) / tf.to_float(batch_size)
-                self.summaries.append(tf.summary.scalar('reg_loss', reg_loss))
+                # K = transformation_matrix.get_shape()[1].value
+                # mat_diff = tf.matmul(transformation_matrix, tf.transpose(transformation_matrix, perm=[0, 2, 1]))
+                # mat_diff -= tf.constant(np.eye(K), dtype=tf.float32)
+                # mat_diff_loss = tf.nn.l2_loss(mat_diff)
+                # batch_size = transformation_matrix.get_shape()[0]
+                # reg_loss = mat_diff_loss * regularization_weight * tf.to_float(self.non_zero_triplets) / tf.to_float(batch_size)
+                # self.summaries.append(tf.summary.scalar('reg_loss', reg_loss))
 
-                final_loss = tf.reduce_mean(self.basic_loss) + reg_loss
+                final_loss = tf.reduce_mean(self.basic_loss) #+ reg_loss
                 # final_loss = tf.reduce_mean(self.weighted_loss) + reg_loss
             return final_loss
 
@@ -175,7 +173,8 @@ positive cloud of size
         """
         return tf.nn.l2_normalize(embedding, dim=-1, epsilon=1e-10, name='embeddings')
 
-class DeepCloudsModel(GenericModel):
+
+class SiamesePointClouds(GenericModel):
     """
     Feature extraction model similar to the one described in Order Matters paper.
     """
@@ -185,107 +184,55 @@ class DeepCloudsModel(GenericModel):
     Name of the model, which will be used as a directory for tensorboard logs. 
     """
 
-    def __init__(self, train,
-                 classes_no, instances_no, pointcloud_size,
-                 read_block_units, process_block_steps,
-                 normalize_embedding=True, verbose=True,
-                 learning_rate=0.0001, gradient_clip=10.0,
-                 input_t_net=False, feature_t_net=False,
-                 read_block_method='birnn',  # birnn or pointnet
-                 process_block_method='max-pool',  # max-pool or attention-rnn
-                 distance='cosine', regularization_weight=0.001):
-        """
-        Build a model.
-        Args:
-            train (bool): Are we training or evaluating the model?
-            batch_size (int): Batch size of SGD.
-            pointcloud_size (int): Number of 3D points in the pointcloud.
-            read_block_units (list of ints): List of hidden units -- each number
-                is a layer of the read block RNN.
-            process_block_steps (int): How many steps should perform process block?
-            normalize_embedding (bool): Should I normalize the embedding of a pointcloud to <0,1>.
-            margin (float): Learning margin. 
-            learning_rate (float): Learning rate of SGD.
-            verbose (bool): Should we print additional info?
-            distance (str): Distance measure of two embeddings: euclidian or cosine.
-        """
+    def __init__(self, setting):
 
         # Save params
-        self.train = train
-        self.classes_no = classes_no
-        self.instances_no = instances_no
-        self.pointcloud_size = pointcloud_size
-        self.read_block_units = read_block_units
-        self.process_block_steps = process_block_steps
-        self.normalize_embedding = normalize_embedding
-        self.gradient_clip = gradient_clip
-        self.verbose = verbose
+        self.classes_no = setting.classes_no_in_batch
+        self.instances_no = setting.instances_no_in_batch
+        self.points_no = setting.points_num
+        self.distance_metric = setting.distance_metric
+        self.learning_rate = setting.learning_rate
+        self.gradient_clip = setting.gradient_clip
         self.non_zero_triplets = []
         self.summaries = []
-        self.distance = distance
-        self.input_t_net = input_t_net
-        self.feature_t_net = feature_t_net
-        self.read_block_method = read_block_method
-        self.process_block_method = process_block_method
-        self.regularization_weight = regularization_weight
-        #self.CLASSES_COUNT = batch_size
-        
-        # Variable decays
         self.global_step = tf.Variable(1, trainable=False, name='global_step')
-        self.learning_rate = learning_rate
-        
-        # input placeholder 
-        with tf.variable_scope("placeholders"):
-            self.margin = tf.placeholder(tf.float32, shape=1, name="input_margin")
-            self.input_point_clouds = tf.placeholder(tf.float32, [self.classes_no * self.instances_no, self.pointcloud_size, 3], name="input_point_clouds")
-            self.placeholder_is_tr = tf.placeholder(tf.bool, shape=(), name="input_is_training")
-        
-        # input t-net
-        with tf.variable_scope("tnet-input"):
-            self.tnet_input = self._define_tnet_input(self.input_point_clouds, is_training=self.placeholder_is_tr, bn_decay=None)
-            self.data_after_step_1 = tf.matmul(self.input_point_clouds, self.tnet_input)        # C*I x N x 3
-            # (C*I x N x 3) 
-        
-        # Read block part 1
-        with tf.variable_scope("read_block_part_1"):
-            self.data_after_step_2 = self._define_read_block_part_1(self.data_after_step_1, is_training=self.placeholder_is_tr, bn_decay=None)
-            # (C*I x N x 64)      
-        
-        # Feature t-net
-        with tf.variable_scope("tnet-feature"):
-            self.tnet_feature = self._define_tnet_feature(self.data_after_step_2, is_training=self.placeholder_is_tr, bn_decay=None)
-            self.data_after_step_3 = tf.matmul(self.data_after_step_2, self.tnet_feature)
-            # (C*I x N x 64)
-        
-        # Read block part 2
-        with tf.variable_scope("read_block_part_2"):
-            self.data_after_step_4 = self._define_read_block_part_2(self.data_after_step_3, is_training=self.placeholder_is_tr, bn_decay=None)
-        # (C*I x N x 512)
-    
-        # Process block
-        with tf.variable_scope("process_block"):
-            self.data_after_step_5 = tf.squeeze(self.max_pool2d(tf.expand_dims(self.data_after_step_4, axis=-2), kernel_size=[self.data_after_step_4.shape[1], 1]))
-            #self.data_after_step_5 = tf.nn.l2_normalize(self.data_after_step_5, axis=-1, epsilon=1e-10)
-        # (C*I x 64)
-        
+
+        # Placeholders
+        self.input_point_cloud = tf.placeholder(tf.float32, shape=(self.classes_no*self.instances_no, self.points_no,
+                                                                   3))
+        self.is_training = tf.placeholder(tf.bool, shape=())
+
+        # Import backbone module
+        backbone_module = importlib.import_module(setting.backbone_model)
+        for name, obj in inspect.getmembers(backbone_module):
+            if inspect.isclass(obj):
+                if setting.backbone_model in str(obj):
+                    backbone_class = obj
+                    break
+
+        # Get features
+        backbone_model = backbone_class(input_point_cloud=self.input_point_cloud, is_training=self.is_training,
+                                        setting=setting.__dict__)
+        features = backbone_model.get_features()
+
         # Find hard indices
         with tf.variable_scope("batch_hard_triplets"):
-            self.hard_indices = self.find_batch_hard_triples(self.data_after_step_5)
+            self.hard_indices = self.find_batch_hard_triples(features)
             
             # Create triplets to train on        
-            self.embds_positive = tf.identity(self.data_after_step_5)
+            self.embds_positive = tf.identity(features)
             self.embds_positive = tf.gather(self.embds_positive, self.hard_indices[0])
             self.embds_positive = tf.reshape(self.embds_positive, (self.classes_no * self.instances_no, -1))
             
-            self.embds_negative = tf.identity(self.data_after_step_5)
+            self.embds_negative = tf.identity(features)
             self.embds_negative = tf.gather(self.embds_negative, self.hard_indices[1])
             self.embds_negative = tf.reshape(self.embds_negative, (self.classes_no * self.instances_no, -1))
             
-            self.triplets = tf.stack([self.data_after_step_5, self.embds_positive, self.embds_negative], axis=-2)
+            self.triplets = tf.stack([features, self.embds_positive, self.embds_negative], axis=-2)
         
         # Optimizer
         with tf.variable_scope("optimizer"):
-            self.loss = self._calculate_loss(self.triplets, self.tnet_feature)
+            self.loss = self._calculate_loss(self.triplets)
             self.optimizer = self._define_optimizer(self.loss)
             self.summaries.append(tf.summary.scalar('loss', self.loss))
 
@@ -327,9 +274,10 @@ class DeepCloudsModel(GenericModel):
         # Find hardes positive in the batch
         #######################################################################
         
-        mask_pos_np = np.zeros(shape=(self.classes_no, self.instances_no, self.classes_no, self.instances_no), dtype=np.float64)
+        mask_pos_np = np.zeros(shape=(self.classes_no, self.instances_no, self.classes_no, self.instances_no),
+                               dtype=np.float64)
         for c in range(self.classes_no):
-            mask_pos_np[c,:,c,:] = 1.
+            mask_pos_np[c, :, c, :] = 1.
         mask_pos = tf.convert_to_tensor(mask_pos_np, dtype=tf.float32)  # C x I x C x I
         mask_pos = tf.reshape(mask_pos, (self.classes_no*self.instances_no, self.classes_no*self.instances_no))
         
@@ -340,9 +288,10 @@ class DeepCloudsModel(GenericModel):
         # Find hardes negative in the batch
         #######################################################################
 
-        mask_neg_np = np.ones(shape=(self.classes_no, self.instances_no, self.classes_no, self.instances_no), dtype=np.float64)
+        mask_neg_np = np.ones(shape=(self.classes_no, self.instances_no, self.classes_no, self.instances_no),
+                              dtype=np.float64)
         for c in range(self.classes_no):
-            mask_neg_np[c,:,c,:] = np.inf
+            mask_neg_np[c, :, c, :] = np.inf
         mask_neg = tf.convert_to_tensor(mask_neg_np, dtype=tf.float32)
         mask_neg = tf.reshape(mask_neg, (self.classes_no*self.instances_no, self.classes_no*self.instances_no))
         
@@ -354,7 +303,7 @@ class DeepCloudsModel(GenericModel):
         #######################################################################
         
         # return
-        return (pos_hard, neg_hard)
+        return pos_hard, neg_hard
 
     def find_semihard_triples(self, input_data):
         """
@@ -393,205 +342,7 @@ class DeepCloudsModel(GenericModel):
         # do the loop:
         r = tf.while_loop(while_condition, body, [i0, d0], shape_invariants=[i0.get_shape(), tf.TensorShape([None, 1])])
 
-    def _define_tnet_input(self, input_data, is_training, bn_decay=None):
-        """
-        Define input tnet.
-        
-        Args:
-            input_data (tf.tensor of size B, N, 3)
-        
-        Returns:
-            tf.tensor of size B, 3, 3
-        """
-
-        # Define tnet's convs
-        with tf.variable_scope("t1_prep"):
-            batch_size = input_data.get_shape()[0].value
-            num_point = input_data.get_shape()[1].value
-            input_image = tf.expand_dims(input_data, -1)
-        
-        with tf.variable_scope("t1_conv1"):
-            net = tf_util.conv2d_on_the_fly(input_image, num_in_channels=1, num_out_channels=64, kernel_size=[1, 3],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-
-        with tf.variable_scope("t1_conv2"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=64, num_out_channels=128, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("t1_conv3"):  
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=128, num_out_channels=1024, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-            
-        with tf.variable_scope("t1_max_pool"): 
-            net = tf_util.max_pool2d_on_the_fly(net, [num_point, 1], padding='VALID')
-            net = tf.reshape(net, [batch_size, -1])
-
-        # Define tnet's FC
-        with tf.variable_scope("t1_fc_1"):
-            net = tf_util.fully_connected_on_the_fly(net, num_inputs=1024, num_outputs=512,
-                                                     bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("t1_fc_2"):
-            net = tf_util.fully_connected_on_the_fly(net, num_inputs=512, num_outputs=256,
-                                                     bn=False, is_training=is_training, bn_decay=bn_decay)
-
-        # Define, reshape and return
-        with tf.variable_scope('t1_transform') as sc:
-            
-            params_t1xyz_weights = tf.get_variable('t1_weights', [256, 9], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
-            params_t1xyz_biases = tf.get_variable('t1_biases', initializer=np.array([1, 0, 0, 0, 1, 0, 0, 0, 1], dtype=np.float32))
-            
-            transform = tf.matmul(net, params_t1xyz_weights)
-            transform = tf.nn.bias_add(transform, params_t1xyz_biases)
-            transform = tf.reshape(transform, [batch_size, 3, 3])
-
-        return transform
-
-    def _define_tnet_feature(self, input_data, is_training, bn_decay=None):
-        """
-        Define input tnet.
-        
-        Args:
-            input_data (tf.tensor of size B, N, F)
-        
-        Returns:
-            tf.tensor of size B, F, F
-        """
-        
-        # Define tnet's convs
-        with tf.variable_scope("t2_prep"):
-            batch_size = input_data.get_shape()[0].value
-            num_point = input_data.get_shape()[1].value
-            input_image = tf.expand_dims(input_data, -2)
-
-        # Fnet convs
-        with tf.variable_scope("t2_conv1"):
-            net = tf_util.conv2d_on_the_fly(input_image, num_in_channels=64, num_out_channels=256, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-            
-        with tf.variable_scope("t2_conv2"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=256, num_out_channels=512, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-            
-        with tf.variable_scope("t2_conv3"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=512, num_out_channels=1024, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("t1_max_pool"):
-            net = tf_util.max_pool2d_on_the_fly(net, [num_point, 1], padding='VALID')
-            net = tf.reshape(net, [batch_size, -1])
-    
-        # Fnet FC
-        with tf.variable_scope("t2_fc_1"):
-            net = tf_util.fully_connected_on_the_fly(net, num_inputs=1024, num_outputs=512,
-                                                     bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("t2_fc_2"):
-            net = tf_util.fully_connected_on_the_fly(net, num_inputs=512, num_outputs=256,
-                                                     bn=False, is_training=is_training, bn_decay=bn_decay)
-    
-        # Create, reshape and return
-        with tf.variable_scope('t2_transform') as sc:
-            
-            K = 64
-            params_t2xyz_weights = tf.get_variable('t2_weights', [256, K * K], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
-            params_t2xyz_biases = tf.get_variable('t2_biases', initializer=np.eye(K, dtype=np.float32).flatten())
-            
-            transform = tf.matmul(net, params_t2xyz_weights)
-            transform = tf.nn.bias_add(transform, params_t2xyz_biases)
-            transform = tf.reshape(transform, [batch_size, 64, 64])
-
-        return transform
-
-    def _define_read_block_part_1(self, input_data, is_training, bn_decay=None):
-        """
-        Define input read block part 1.
-        
-        Args:
-            input_data (tf.tensor of size B, N, 3)
-        
-        Returns:
-            tf.tensor of size B, N, F
-        """
-        
-        # Prep
-        with tf.variable_scope("prep_in"):
-            batch_size = input_data.get_shape()[0].value
-            num_point = input_data.get_shape()[1].value
-            input_image = tf.expand_dims(input_data, -1)
-        
-        # Read block convs
-        with tf.variable_scope("conv1"):
-            net = tf_util.conv2d_on_the_fly(input_image, num_in_channels=1, num_out_channels=8, kernel_size=[1, 3],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("conv2"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=8, num_out_channels=64, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        # Return
-        with tf.variable_scope("prep_out"):
-            net = tf.squeeze(net, axis=-2)
-        return net
-
-    def _define_read_block_part_2(self, input_data, is_training, bn_decay=None):
-        """
-        Define input read block part 2.
-        
-        Args:
-            input_data (tf.tensor of size B, N, F)
-        
-        Returns:
-            tf.tensor of size B, N, E
-        """
-        
-        # Prep
-        with tf.variable_scope("prep_in"):
-            net = tf.expand_dims(input_data, axis=-2)
-        
-        # Read block part 2 convs 
-        with tf.variable_scope("conv3"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=64, num_out_channels=128, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("conv4"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=128, num_out_channels=256, kernel_size=[1, 1],
-                                            padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-        
-        with tf.variable_scope("conv5"):
-            net = tf_util.conv2d_on_the_fly(net, num_in_channels=256, num_out_channels=self.read_block_units[-1] * 2, kernel_size=[1, 1],
-                                 padding='VALID', stride=[1, 1], bn=False, is_training=is_training, bn_decay=bn_decay)
-
-        with tf.variable_scope("prep_out"):
-            net = tf.squeeze(net, axis=-2)
-
-        # Return
-        return net
-
-    def max_pool2d(self, inputs,
-                   kernel_size,
-                   stride=[2, 2],
-                   padding='VALID'):
-      """ 2D max pooling.
-
-      Args:
-          inputs: 4-D tensor BxHxWxC
-          kernel_size: a list of 2 ints
-          stride: a list of 2 ints
-  
-      Returns:
-          Variable tensor
-      """
-#      with tf.variable_scope(scope) as sc:
-      kernel_h, kernel_w = kernel_size
-      stride_h, stride_w = stride
-      outputs = tf.nn.max_pool(inputs,
-                                   ksize=[1, kernel_h, kernel_w, 1],
-                                   strides=[1, stride_h, stride_w, 1],
-                                   padding=padding)
-#                                   name=sc.name)
-      return outputs
-
-    def _calculate_loss(self, embeddings, tnet_feature):
+    def _calculate_loss(self, embeddings):#, tnet_feature):
         """
         Calculate loss.
 
@@ -602,22 +353,16 @@ class DeepCloudsModel(GenericModel):
             (float): Loss of current batch.
         """
 
-        if self.verbose:
-            sys.stdout.write("Defining loss function...")
-            sys.stdout.flush()
 
         with tf.name_scope("loss"):
             embeddings_list = tf.unstack(embeddings, axis=1)
-            if self.distance == 'cosine':
-                ret = self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2],
-                                                self.transform_anr, self.regularization_weight)  # , self.placeholder_label, self.classes_learning_weights)
-            elif self.distance == 'euclidian':
-                ret = self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2], tnet_feature, self.regularization_weight)
+            if self.distance_metric == 'cosine':
+                ret = self._triplet_cosine_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2])
+            elif self.distance_metric == 'euclidian':
+                ret = self._triplet_loss(embeddings_list[0], embeddings_list[1], embeddings_list[2])
             else:
                raise ValueError("I don't know this embeddings distance..") 
 
-        if self.verbose:
-            print ("OK!")
         return ret
 
     def _define_optimizer(self, loss_function):
@@ -630,6 +375,7 @@ class DeepCloudsModel(GenericModel):
             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             tvars = tf.trainable_variables()
             grads_and_vars = optimizer.compute_gradients(loss_function)
+
             # Clip
             if self.gradient_clip > 0:
                 grads, vars = zip(*grads_and_vars)
