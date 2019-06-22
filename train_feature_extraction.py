@@ -67,12 +67,15 @@ def train_features_extraction(name, setting=None):
         for var in variables_names:
             histograms.append(tf.summary.histogram(var.name, var))
         hist_summary = tf.summary.merge(histograms)
+        save_model_index = 0
+        save_summary_index = 0
         
         ##################################################################################################
         ########################################### EPOCHS LOOP ##########################################
         ##################################################################################################
 
-        for epoch in tqdm(range(setting.epochs)):
+        pbar = tqdm(total=setting.training_iterations)
+        while True:
 
             ##################################################################################################
             ########################################### BATCHES LOOP #########################################
@@ -92,10 +95,15 @@ def train_features_extraction(name, setting=None):
                 global_batch_idx, _, training_loss, training_pos, training_neg, summary_train = sess.run([
                     model.global_step, model.get_optimizer(), model.get_loss_function(), model.pos_dist, model.neg_dist,
                     model.get_summary()], feed_dict={model.input_point_cloud: clouds, model.is_training: True})
+            pbar.n = global_batch_idx
+            pbar.refresh()
              
-            if epoch % 1 == 0:
+            if global_batch_idx // setting.save_summary_after_iterations > save_summary_index:
 
-                # Loggin summary
+                # Update index
+                save_summary_index += 1
+
+                # Log summary
                 summary_log = tf.Summary()
                 summary_log.value.add(tag="%sdist_pos" % "", simple_value=np.sum(training_pos))
                 summary_log.value.add(tag="%sdist_neg" % "", simple_value=np.sum(training_neg))
@@ -121,9 +129,11 @@ def train_features_extraction(name, setting=None):
                 ########################################## SAVE MODEL ############################################
                 ##################################################################################################
 
-                if epoch % setting.save_model_after_epochs == setting.save_model_after_epochs - 1:
+                if global_batch_idx // setting.save_model_after_iterations > save_model_index:
+                    save_model_index += 1
                     save_path = model.save_model(sess, name)
                     print("Model saved in file: %s" % save_path)
+        pbar.close()
 
 # def test_features_extraction(data_gen, model, sess, partial_score=True):
 #     """

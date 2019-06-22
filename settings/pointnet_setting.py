@@ -26,9 +26,10 @@ class Setting():
     classes_no_in_batch = 8
     instances_no_in_batch = 4
 
-    epochs = 250
+    gradient_clip = -1
     learning_rate = 0.001
-    gradient_clip = -1.0
-    save_model_after_epochs = 50
+    training_iterations = 100000
+    save_model_after_iterations = 25000
+    save_summary_after_iterations = 1000
     device = '/device:GPU:0'
 

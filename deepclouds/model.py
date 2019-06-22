@@ -195,7 +195,7 @@ class SiamesePointClouds(GenericModel):
         self.gradient_clip = setting.gradient_clip
         self.non_zero_triplets = []
         self.summaries = []
-        self.global_step = tf.Variable(1, trainable=False, name='global_step')
+        self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
         # Placeholders
         self.input_point_cloud = tf.placeholder(tf.float32, shape=(self.classes_no*self.instances_no, self.points_no,
